@@ -11,6 +11,21 @@ from typing import Any
 
 import httpx
 
+OPENCODE_FALLBACK_ANTHROPIC = {
+    "claude-sonnet-4-5",
+    "claude-sonnet-4",
+    "claude-haiku-4-5",
+    "claude-3-5-haiku",
+    "claude-opus-4-5",
+    "claude-opus-4-1",
+    "minimax-m2.1-free",
+}
+
+OPENCODE_FALLBACK_GEMINI = {
+    "gemini-3-pro",
+    "gemini-3-flash",
+}
+
 OPENCODE_MODEL_URL = "https://opencode.ai/zen/v1/models"
 OPENCODE_MODELS_DEV_URL = "https://models.dev/api.json"
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
@@ -30,6 +45,10 @@ class ModelRegistry:
         provider = data.get(model_id)
         if provider:
             return provider
+        if model_id in OPENCODE_FALLBACK_ANTHROPIC:
+            return "anthropic"
+        if model_id in OPENCODE_FALLBACK_GEMINI:
+            return "gemini"
         return "openai"
 
     async def ensure_provider_cache(self, provider: str, api_key: str | None = None) -> None:

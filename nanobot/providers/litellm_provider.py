@@ -9,29 +9,6 @@ from litellm import acompletion
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.providers.model_registry import get_model_registry
 
-OPENCODE_ANTHROPIC_MODELS = {
-    "claude-sonnet-4-5",
-    "claude-sonnet-4",
-    "claude-haiku-4-5",
-    "claude-3-5-haiku",
-    "claude-opus-4-5",
-    "claude-opus-4-1",
-    "minimax-m2.1-free",
-}
-
-OPENCODE_OPENAI_COMPAT_MODELS = {
-    "minimax-m2.1",
-    "glm-4.7",
-    "glm-4.7-free",
-    "glm-4.6",
-    "kimi-k2.5",
-    "kimi-k2.5-free",
-    "kimi-k2-thinking",
-    "kimi-k2",
-    "qwen3-coder",
-    "big-pickle",
-}
-
 
 class LiteLLMProvider(LLMProvider):
     """
@@ -129,6 +106,7 @@ class LiteLLMProvider(LLMProvider):
                 model = f"anthropic/{model_id}"
                 if self.api_key:
                     os.environ.setdefault("ANTHROPIC_API_KEY", self.api_key)
+                self.api_base = "https://opencode.ai/zen"
             else:
                 if opencode_provider not in {"openai", "anthropic"}:
                     print(
@@ -138,8 +116,8 @@ class LiteLLMProvider(LLMProvider):
                 model = f"openai/{model_id}"
                 if self.api_key:
                     os.environ.setdefault("OPENAI_API_KEY", self.api_key)
-            if not self.api_base:
-                self.api_base = "https://opencode.ai/zen/v1"
+                if not self.api_base:
+                    self.api_base = "https://opencode.ai/zen/v1"
 
         # For Zhipu/Z.ai, ensure prefix is present
         # Handle cases like "glm-4.7-flash" -> "zhipu/glm-4.7-flash"
@@ -171,7 +149,7 @@ class LiteLLMProvider(LLMProvider):
         }
 
         # Pass api_base directly for custom endpoints (vLLM, etc.)
-        if self.api_base:
+        if self.api_base and (not model.startswith("anthropic/") or self.is_opencode):
             kwargs["api_base"] = self.api_base
 
         if tools:
