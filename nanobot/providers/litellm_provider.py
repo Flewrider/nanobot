@@ -8,6 +8,29 @@ from litellm import acompletion
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
+OPENCODE_ANTHROPIC_MODELS = {
+    "claude-sonnet-4-5",
+    "claude-sonnet-4",
+    "claude-haiku-4-5",
+    "claude-3-5-haiku",
+    "claude-opus-4-5",
+    "claude-opus-4-1",
+    "minimax-m2.1-free",
+}
+
+OPENCODE_OPENAI_COMPAT_MODELS = {
+    "minimax-m2.1",
+    "glm-4.7",
+    "glm-4.7-free",
+    "glm-4.6",
+    "kimi-k2.5",
+    "kimi-k2.5-free",
+    "kimi-k2-thinking",
+    "kimi-k2",
+    "qwen3-coder",
+    "big-pickle",
+}
+
 
 class LiteLLMProvider(LLMProvider):
     """
@@ -48,8 +71,12 @@ class LiteLLMProvider(LLMProvider):
                 # OpenRouter mode - set key
                 os.environ["OPENROUTER_API_KEY"] = api_key
             elif self.is_opencode:
-                # OpenCode Zen (OpenAI-compatible)
-                os.environ["OPENAI_API_KEY"] = api_key
+                # OpenCode Zen (OpenAI-compatible or Anthropic)
+                model_id = default_model.split("/", 1)[1] if "/" in default_model else default_model
+                if self._opencode_provider_for_model(model_id) == "anthropic":
+                    os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
+                else:
+                    os.environ["OPENAI_API_KEY"] = api_key
             elif self.is_vllm:
                 # vLLM/custom endpoint - uses OpenAI-compatible API
                 os.environ["OPENAI_API_KEY"] = api_key
@@ -99,8 +126,16 @@ class LiteLLMProvider(LLMProvider):
 
         # For OpenCode Zen, use OpenAI-compatible provider with Zen base URL
         if model.startswith("opencode/"):
-            model = model.split("/", 1)[1]
-            model = f"openai/{model}"
+            model_id = model.split("/", 1)[1]
+            opencode_provider = self._opencode_provider_for_model(model_id)
+            if opencode_provider == "anthropic":
+                model = f"anthropic/{model_id}"
+                if self.api_key:
+                    os.environ.setdefault("ANTHROPIC_API_KEY", self.api_key)
+            else:
+                model = f"openai/{model_id}"
+                if self.api_key:
+                    os.environ.setdefault("OPENAI_API_KEY", self.api_key)
             if not self.api_base:
                 self.api_base = "https://opencode.ai/zen/v1"
 
@@ -191,3 +226,10 @@ class LiteLLMProvider(LLMProvider):
     def get_default_model(self) -> str:
         """Get the default model."""
         return self.default_model
+
+    def _opencode_provider_for_model(self, model_id: str) -> str:
+        if model_id in OPENCODE_ANTHROPIC_MODELS:
+            return "anthropic"
+        if model_id in OPENCODE_OPENAI_COMPAT_MODELS:
+            return "openai"
+        return "openai"
