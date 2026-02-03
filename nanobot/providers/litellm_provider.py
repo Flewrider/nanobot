@@ -7,6 +7,7 @@ import litellm
 from litellm import acompletion
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from nanobot.providers.model_registry import get_model_registry
 
 OPENCODE_ANTHROPIC_MODELS = {
     "claude-sonnet-4-5",
@@ -70,13 +71,6 @@ class LiteLLMProvider(LLMProvider):
             if self.is_openrouter:
                 # OpenRouter mode - set key
                 os.environ["OPENROUTER_API_KEY"] = api_key
-            elif self.is_opencode:
-                # OpenCode Zen (OpenAI-compatible or Anthropic)
-                model_id = default_model.split("/", 1)[1] if "/" in default_model else default_model
-                if self._opencode_provider_for_model(model_id) == "anthropic":
-                    os.environ.setdefault("ANTHROPIC_API_KEY", api_key)
-                else:
-                    os.environ["OPENAI_API_KEY"] = api_key
             elif self.is_vllm:
                 # vLLM/custom endpoint - uses OpenAI-compatible API
                 os.environ["OPENAI_API_KEY"] = api_key
@@ -123,16 +117,24 @@ class LiteLLMProvider(LLMProvider):
         # For OpenRouter, prefix model name if not already prefixed
         if self.is_openrouter and not model.startswith("openrouter/"):
             model = f"openrouter/{model}"
+            registry = get_model_registry()
+            await registry.ensure_provider_cache("openrouter")
 
         # For OpenCode Zen, use OpenAI-compatible provider with Zen base URL
         if model.startswith("opencode/"):
             model_id = model.split("/", 1)[1]
-            opencode_provider = self._opencode_provider_for_model(model_id)
+            registry = get_model_registry()
+            opencode_provider = await registry.get_opencode_provider(model_id)
             if opencode_provider == "anthropic":
                 model = f"anthropic/{model_id}"
                 if self.api_key:
                     os.environ.setdefault("ANTHROPIC_API_KEY", self.api_key)
             else:
+                if opencode_provider not in {"openai", "anthropic"}:
+                    print(
+                        f"Warning: Opencode model {model_id} uses {opencode_provider}; "
+                        "defaulting to OpenAI-compatible routing."
+                    )
                 model = f"openai/{model_id}"
                 if self.api_key:
                     os.environ.setdefault("OPENAI_API_KEY", self.api_key)
@@ -156,6 +158,10 @@ class LiteLLMProvider(LLMProvider):
         # For Gemini, ensure gemini/ prefix if not already present
         if "gemini" in model.lower() and not model.startswith("gemini/"):
             model = f"gemini/{model}"
+
+        if model.startswith("openai/"):
+            registry = get_model_registry()
+            await registry.ensure_provider_cache("openai", api_key=self.api_key)
 
         kwargs: dict[str, Any] = {
             "model": model,
@@ -226,10 +232,3 @@ class LiteLLMProvider(LLMProvider):
     def get_default_model(self) -> str:
         """Get the default model."""
         return self.default_model
-
-    def _opencode_provider_for_model(self, model_id: str) -> str:
-        if model_id in OPENCODE_ANTHROPIC_MODELS:
-            return "anthropic"
-        if model_id in OPENCODE_OPENAI_COMPAT_MODELS:
-            return "openai"
-        return "openai"
