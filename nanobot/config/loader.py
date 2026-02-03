@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from nanobot.config.schema import Config
 
 
@@ -15,50 +17,282 @@ def get_config_path() -> Path:
 def get_data_dir() -> Path:
     """Get the nanobot data directory."""
     from nanobot.utils.helpers import get_data_path
+
     return get_data_path()
 
 
 def load_config(config_path: Path | None = None) -> Config:
     """
     Load configuration from file or create default.
-    
+
     Args:
         config_path: Optional path to config file. Uses default if not provided.
-    
+
     Returns:
         Loaded configuration object.
     """
     path = config_path or get_config_path()
-    
+
     if path.exists():
+        data: Any = {}
         try:
-            with open(path) as f:
-                data = json.load(f)
-            return Config.model_validate(convert_keys(data))
-        except (json.JSONDecodeError, ValueError) as e:
+            with open(path, encoding="utf-8") as f:
+                content = f.read()
+            raw = json.loads(_strip_json_comments(content))
+            data = convert_keys(raw)
+            return Config.model_validate(data)
+        except ValidationError as e:
+            data = _coerce_allow_from(data)
+            try:
+                print(f"Warning: Config validation error in {path}: {e}")
+                print("Attempting to coerce allow_from values to strings.")
+                return Config.model_validate(data)
+            except ValidationError as e2:
+                print(f"Warning: Failed to load config from {path}: {e2}")
+                print("Using default configuration.")
+        except json.JSONDecodeError as e:
             print(f"Warning: Failed to load config from {path}: {e}")
             print("Using default configuration.")
-    
+
     return Config()
+
+
+def _coerce_allow_from(data: Any) -> Any:
+    """Coerce allow_from entries to strings when possible."""
+    if not isinstance(data, dict):
+        return data
+
+    channels = data.get("channels")
+    if not isinstance(channels, dict):
+        return data
+
+    updated_channels = dict(channels)
+    for channel_name in ("telegram", "whatsapp"):
+        channel = updated_channels.get(channel_name)
+        if not isinstance(channel, dict):
+            continue
+        allow_from = channel.get("allow_from")
+        if isinstance(allow_from, list):
+            channel = dict(channel)
+            channel["allow_from"] = [str(value) for value in allow_from]
+            updated_channels[channel_name] = channel
+
+    updated_data = dict(data)
+    updated_data["channels"] = updated_channels
+    return updated_data
 
 
 def save_config(config: Config, config_path: Path | None = None) -> None:
     """
     Save configuration to file.
-    
+
     Args:
         config: Configuration to save.
         config_path: Optional path to save to. Uses default if not provided.
     """
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Convert to camelCase format
     data = config.model_dump()
     data = convert_to_camel(data)
-    
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+
+    content = render_config_with_comments(data)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _strip_json_comments(text: str) -> str:
+    """Strip // and /* */ comments from JSON-like text."""
+    result: list[str] = []
+    in_string = False
+    escape = False
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if in_string:
+            result.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            i += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            result.append(char)
+            i += 1
+            continue
+
+        if char == "/" and i + 1 < len(text):
+            next_char = text[i + 1]
+            if next_char == "/":
+                i += 2
+                while i < len(text) and text[i] not in "\r\n":
+                    i += 1
+                continue
+            if next_char == "*":
+                i += 2
+                while i + 1 < len(text) and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                i += 2
+                continue
+
+        result.append(char)
+        i += 1
+
+    return "".join(result)
+
+
+def render_config_with_comments(data: dict[str, Any]) -> str:
+    """Render a JSON-with-comments config template."""
+
+    def _json(value: Any) -> str:
+        return json.dumps(value, ensure_ascii=True)
+
+    agents = data["agents"]["defaults"]
+    channels = data["channels"]
+    providers = data["providers"]
+    gateway = data["gateway"]
+    tools = data["tools"]["web"]["search"]
+
+    return """{
+  // Default agent behavior and model selection.
+  "agents": {
+    "defaults": {
+      // Filesystem path used by the agent for workspace files.
+      "workspace": %s,
+      // Default model for the agent (provider/model).
+      "model": %s,
+      // Maximum tokens per response.
+      "maxTokens": %s,
+      // Sampling temperature (0.0-1.0).
+      "temperature": %s,
+      // Max tool calls per turn.
+      "maxToolIterations": %s
+    }
+  },
+
+  // Chat channel configuration.
+  "channels": {
+    "whatsapp": {
+      // Enable the WhatsApp bridge channel.
+      "enabled": %s,
+      // WebSocket URL for the local bridge.
+      "bridgeUrl": %s,
+      // Allowed phone numbers (strings). Empty = allow all.
+      "allowFrom": %s
+    },
+    "telegram": {
+      // Enable the Telegram channel.
+      "enabled": %s,
+      // Bot token from @BotFather.
+      "token": %s,
+      // Allowed Telegram user IDs/usernames (strings). Empty = allow all.
+      "allowFrom": %s
+    }
+  },
+
+  // Provider API keys and base URLs.
+    "providers": {
+      "anthropic": {
+        // Anthropic API key.
+        "apiKey": %s,
+        // Optional API base URL.
+        "apiBase": %s
+      },
+      "openai": {
+        // OpenAI API key.
+        "apiKey": %s,
+        // Optional API base URL.
+        "apiBase": %s
+      },
+      "openrouter": {
+        // OpenRouter API key.
+        "apiKey": %s,
+        // Optional API base URL (default is https://openrouter.ai/api/v1).
+        "apiBase": %s
+      },
+    "groq": {
+      // Groq API key.
+      "apiKey": %s,
+      // Optional API base URL.
+      "apiBase": %s
+    },
+    "zhipu": {
+      // Zhipu API key.
+      "apiKey": %s,
+      // Optional API base URL.
+      "apiBase": %s
+    },
+    "vllm": {
+      // vLLM API key (if required).
+      "apiKey": %s,
+      // vLLM API base URL.
+      "apiBase": %s
+    },
+    "gemini": {
+      // Gemini API key.
+      "apiKey": %s,
+      // Optional API base URL.
+      "apiBase": %s
+    }
+  },
+
+  // Gateway/server binding.
+  "gateway": {
+    // Host to bind (use 127.0.0.1 for local-only).
+    "host": %s,
+    // Port to bind the gateway.
+    "port": %s
+  },
+
+  // Tool configuration.
+  "tools": {
+    "web": {
+      "search": {
+        // Brave Search API key.
+        "apiKey": %s,
+        // Max results per web search.
+        "maxResults": %s
+      }
+    }
+  }
+}
+""" % (
+        _json(agents["workspace"]),
+        _json(agents["model"]),
+        _json(agents["maxTokens"]),
+        _json(agents["temperature"]),
+        _json(agents["maxToolIterations"]),
+        _json(channels["whatsapp"]["enabled"]),
+        _json(channels["whatsapp"]["bridgeUrl"]),
+        _json(channels["whatsapp"]["allowFrom"]),
+        _json(channels["telegram"]["enabled"]),
+        _json(channels["telegram"]["token"]),
+        _json(channels["telegram"]["allowFrom"]),
+        _json(providers["anthropic"]["apiKey"]),
+        _json(providers["anthropic"]["apiBase"]),
+        _json(providers["openai"]["apiKey"]),
+        _json(providers["openai"]["apiBase"]),
+        _json(providers["openrouter"]["apiKey"]),
+        _json(providers["openrouter"]["apiBase"]),
+        _json(providers["groq"]["apiKey"]),
+        _json(providers["groq"]["apiBase"]),
+        _json(providers["zhipu"]["apiKey"]),
+        _json(providers["zhipu"]["apiBase"]),
+        _json(providers["vllm"]["apiKey"]),
+        _json(providers["vllm"]["apiBase"]),
+        _json(providers["gemini"]["apiKey"]),
+        _json(providers["gemini"]["apiBase"]),
+        _json(gateway["host"]),
+        _json(gateway["port"]),
+        _json(tools["apiKey"]),
+        _json(tools["maxResults"]),
+    )
 
 
 def convert_keys(data: Any) -> Any:

@@ -21,12 +21,16 @@ export class BridgeServer {
   private wa: WhatsAppClient | null = null;
   private clients: Set<WebSocket> = new Set();
 
-  constructor(private port: number, private authDir: string) {}
+  constructor(
+    private port: number,
+    private authDir: string,
+    private host: string,
+  ) {}
 
   async start(): Promise<void> {
     // Create WebSocket server
-    this.wss = new WebSocketServer({ port: this.port });
-    console.log(`🌉 Bridge server listening on ws://localhost:${this.port}`);
+    this.wss = new WebSocketServer({ port: this.port, host: this.host });
+    console.log(`🌉 Bridge server listening on ws://${this.host}:${this.port}`);
 
     // Initialize WhatsApp client
     this.wa = new WhatsAppClient({
