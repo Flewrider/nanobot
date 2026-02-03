@@ -35,7 +35,6 @@ class LiteLLMProvider(LLMProvider):
         self.is_openrouter = bool(
             (api_key and api_key.startswith("sk-or-"))
             or (api_base and "openrouter" in api_base)
-            or self.provider_bases.get("openrouter")
             or self.provider_keys.get("openrouter")
         )
 
@@ -104,9 +103,8 @@ class LiteLLMProvider(LLMProvider):
 
         self._apply_model_env(model)
 
-        # For OpenRouter, prefix model name if not already prefixed
-        if self.is_openrouter and not model.startswith("openrouter/"):
-            model = f"openrouter/{model}"
+        # For OpenRouter, only route when explicitly prefixed
+        if model.startswith("openrouter/"):
             registry = get_model_registry()
             await registry.ensure_provider_cache("openrouter")
 
