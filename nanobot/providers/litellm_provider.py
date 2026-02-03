@@ -31,8 +31,13 @@ class LiteLLMProvider(LLMProvider):
             api_base and "openrouter" in api_base
         )
 
-        # Detect OpenCode Zen by explicit api_base
+        # Detect OpenCode Zen by explicit api_base or model prefix
         self.is_opencode = bool(api_base) and "opencode.ai/zen" in api_base
+        if default_model.startswith("opencode/"):
+            self.is_opencode = True
+        if self.is_opencode and not api_base:
+            api_base = "https://opencode.ai/zen/v1"
+            self.api_base = api_base
 
         # Track if using custom endpoint (vLLM, etc.)
         self.is_vllm = bool(api_base) and not self.is_openrouter and not self.is_opencode
