@@ -13,3 +13,12 @@ docs/
 *.pyz
 *.pywz
 *.pyzz
+
+# Ignore new skills by default; allow existing tracked skills.
+nanobot/skills/*
+!nanobot/skills/README.md
+!nanobot/skills/github/**
+!nanobot/skills/skill-creator/**
+!nanobot/skills/summarize/**
+!nanobot/skills/weather/**
+!nanobot/skills/tmux/**
