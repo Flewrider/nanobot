@@ -220,14 +220,24 @@ class LiteLLMProvider(LLMProvider):
 
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into our standard format."""
-        choice = response.choices[0]
-        message = choice.message
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            return LLMResponse(
+                content=None,
+                finish_reason="error",
+                usage={},
+            )
+
+        choice = choices[0]
+        message = getattr(choice, "message", None) or choice
 
         tool_calls = []
-        if hasattr(message, "tool_calls") and message.tool_calls:
-            for tc in message.tool_calls:
+        tool_call_list = getattr(message, "tool_calls", None) or getattr(choice, "tool_calls", None)
+        if tool_call_list:
+            for tc in tool_call_list:
                 # Parse arguments from JSON string if needed
-                args = tc.function.arguments
+                func = getattr(tc, "function", None) or {}
+                args = getattr(func, "arguments", None)
                 if isinstance(args, str):
                     import json
 
@@ -238,24 +248,41 @@ class LiteLLMProvider(LLMProvider):
 
                 tool_calls.append(
                     ToolCallRequest(
-                        id=tc.id,
-                        name=tc.function.name,
-                        arguments=args,
+                        id=getattr(tc, "id", ""),
+                        name=getattr(func, "name", ""),
+                        arguments=args or {},
                     )
                 )
 
         usage = {}
-        if hasattr(response, "usage") and response.usage:
-            usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            }
+        usage_obj = getattr(response, "usage", None)
+        if usage_obj:
+            prompt_tokens = getattr(usage_obj, "prompt_tokens", None)
+            completion_tokens = getattr(usage_obj, "completion_tokens", None)
+            total_tokens = getattr(usage_obj, "total_tokens", None)
+            if (
+                prompt_tokens is not None
+                or completion_tokens is not None
+                or total_tokens is not None
+            ):
+                usage = {
+                    "prompt_tokens": prompt_tokens or 0,
+                    "completion_tokens": completion_tokens or 0,
+                    "total_tokens": total_tokens or 0,
+                }
+
+        content = getattr(message, "content", None)
+        if isinstance(content, list):
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+            content = "".join(text_parts)
 
         return LLMResponse(
-            content=message.content,
+            content=content,
             tool_calls=tool_calls,
-            finish_reason=choice.finish_reason or "stop",
+            finish_reason=getattr(choice, "finish_reason", None) or "stop",
             usage=usage,
         )
 

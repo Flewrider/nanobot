@@ -195,8 +195,11 @@ class AgentLoop:
         iteration = 0
         final_content = None
 
-        auto_continue_limit = 3
+        auto_continue_limit = 5
         auto_continues = 0
+        message_continue_limit = 2
+        message_continues = 0
+        message_tool_used = False
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -233,6 +236,8 @@ class AgentLoop:
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
+                    if tool_call.name == "message":
+                        message_tool_used = True
             else:
                 # No tool calls, we're done
                 if (
@@ -251,6 +256,37 @@ class AgentLoop:
                             ),
                         }
                     )
+                    continue
+
+                if (
+                    msg.channel != "system"
+                    and message_tool_used
+                    and message_continues < message_continue_limit
+                ):
+                    message_continues += 1
+                    message_tool_used = False
+                    messages = self.context.add_assistant_message(messages, response.content)
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Continue executing the task. Only stop once the work is done."
+                            ),
+                        }
+                    )
+                    continue
+
+                if message_tool_used and (not response.content or not response.content.strip()):
+                    messages = self.context.add_assistant_message(messages, response.content)
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Provide a brief final status update for the user and stop."
+                            ),
+                        }
+                    )
+                    message_tool_used = False
                     continue
 
                 final_content = response.content
@@ -386,15 +422,39 @@ class AgentLoop:
             "next steps",
             "step 1",
             "step 2",
+            "step 3",
+            "step 4",
             "plan:",
             "todo",
             "to-do",
             "i will",
             "i'll",
             "i am going to",
+            "i'm going to",
+            "i am gonna",
+            "i'm gonna",
+            "let me",
+            "first,",
+            "second,",
+            "third,",
+            "then",
             "here's the plan",
             "checklist",
             "- [ ]",
+            "1)",
+            "2)",
+            "1.",
+            "2.",
+            "3.",
+            "1️⃣",
+            "2️⃣",
+            "3️⃣",
+            "doing this now",
+            "one sec",
+            "hold on",
+            "working on it",
+            "give me a moment",
+            "what i need to do",
         ]
         return any(trigger in text for trigger in triggers)
 
