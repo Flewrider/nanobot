@@ -6,6 +6,7 @@ import re
 
 from loguru import logger
 from telegram import Update
+from telegram.constants import ChatAction
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
 from nanobot.bus.events import OutboundMessage
@@ -226,6 +227,11 @@ class TelegramChannel(BaseChannel):
         user = update.effective_user
         chat_id = message.chat_id
 
+        typing_stop = asyncio.Event()
+        typing_task = None
+        if self._app:
+            typing_task = asyncio.create_task(self._typing_loop(chat_id, typing_stop))
+
         # Use stable numeric ID, but keep username for allowlist compatibility
         sender_id = str(user.id)
         if user.username:
@@ -302,19 +308,39 @@ class TelegramChannel(BaseChannel):
         logger.debug(f"Telegram message from {sender_id}: {content[:50]}...")
 
         # Forward to the message bus
-        await self._handle_message(
-            sender_id=sender_id,
-            chat_id=str(chat_id),
-            content=content,
-            media=media_paths,
-            metadata={
-                "message_id": message.message_id,
-                "user_id": user.id,
-                "username": user.username,
-                "first_name": user.first_name,
-                "is_group": message.chat.type != "private",
-            },
-        )
+        try:
+            await self._handle_message(
+                sender_id=sender_id,
+                chat_id=str(chat_id),
+                content=content,
+                media=media_paths,
+                metadata={
+                    "message_id": message.message_id,
+                    "user_id": user.id,
+                    "username": user.username,
+                    "first_name": user.first_name,
+                    "is_group": message.chat.type != "private",
+                },
+            )
+        finally:
+            typing_stop.set()
+            if typing_task:
+                await typing_task
+
+    async def _typing_loop(self, chat_id: int, stop_event: asyncio.Event) -> None:
+        if not self._app:
+            return
+
+        while not stop_event.is_set():
+            try:
+                await self._app.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            except Exception as e:
+                logger.debug(f"Failed to send typing action: {e}")
+                return
+            await asyncio.wait(
+                [stop_event.wait()],
+                timeout=4.0,
+            )
 
     def _get_extension(self, media_type: str, mime_type: str | None) -> str:
         """Get file extension based on media type."""
