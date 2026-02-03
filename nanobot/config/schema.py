@@ -170,8 +170,8 @@ class Config(BaseSettings):
     def get_api_key(self) -> str | None:
         """Get API key using model prefix or priority order."""
         provider = self._provider_for_model(self.agents.defaults.model)
-        if provider and provider.api_key:
-            return provider.api_key
+        if provider is not None:
+            return provider.api_key or None
 
         return (
             self.providers.openrouter.api_key
@@ -188,14 +188,18 @@ class Config(BaseSettings):
     def get_api_base(self) -> str | None:
         """Get API base URL for the selected provider."""
         provider = self._provider_for_model(self.agents.defaults.model)
-        if provider is not None and provider is self.providers.openrouter and provider.api_key:
-            return provider.api_base or "https://openrouter.ai/api/v1"
-        if provider is not None and provider is self.providers.opencode and provider.api_key:
-            return provider.api_base or "https://opencode.ai/zen/v1"
-        if provider is not None and provider is self.providers.zhipu and provider.api_key:
-            return provider.api_base
-        if provider is not None and provider is self.providers.vllm and provider.api_base:
-            return provider.api_base
+        if provider is not None:
+            if provider is self.providers.openrouter and provider.api_key:
+                return provider.api_base or "https://openrouter.ai/api/v1"
+            if provider is self.providers.opencode and provider.api_key:
+                return provider.api_base or "https://opencode.ai/zen/v1"
+            if provider is self.providers.zhipu and provider.api_key:
+                return provider.api_base
+            if provider is self.providers.vllm and provider.api_base:
+                return provider.api_base
+            if provider.api_base:
+                return provider.api_base
+            return None
 
         if self.providers.openrouter.api_key:
             return self.providers.openrouter.api_base or "https://openrouter.ai/api/v1"
