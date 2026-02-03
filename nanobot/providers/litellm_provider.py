@@ -97,9 +97,12 @@ class LiteLLMProvider(LLMProvider):
         if self.is_openrouter and not model.startswith("openrouter/"):
             model = f"openrouter/{model}"
 
-        # For OpenCode Zen, strip opencode/ prefix if provided
+        # For OpenCode Zen, use OpenAI-compatible provider with Zen base URL
         if model.startswith("opencode/"):
             model = model.split("/", 1)[1]
+            model = f"openai/{model}"
+            if not self.api_base:
+                self.api_base = "https://opencode.ai/zen/v1"
 
         # For Zhipu/Z.ai, ensure prefix is present
         # Handle cases like "glm-4.7-flash" -> "zhipu/glm-4.7-flash"
