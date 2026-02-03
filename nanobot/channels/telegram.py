@@ -95,6 +95,7 @@ class TelegramChannel(BaseChannel):
         self.groq_api_key = groq_api_key
         self._app: Application | None = None
         self._chat_ids: dict[str, int] = {}  # Map sender_id to chat_id for replies
+        self._typing_tasks: dict[int, tuple[asyncio.Event, asyncio.Task[None]]] = {}
 
     async def start(self) -> None:
         """Start the Telegram bot with long polling."""
@@ -152,6 +153,8 @@ class TelegramChannel(BaseChannel):
         self._running = False
 
         if self._app:
+            for chat_id in list(self._typing_tasks.keys()):
+                self._stop_typing(chat_id)
             logger.info("Stopping Telegram bot...")
             await self._app.updater.stop()
             await self._app.stop()
@@ -164,11 +167,14 @@ class TelegramChannel(BaseChannel):
             logger.warning("Telegram bot not running")
             return
 
+        self._stop_typing(int(msg.chat_id))
+
+        html_content = _markdown_to_telegram_html(msg.content)
+
         try:
             # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.chat_id)
             # Convert markdown to Telegram HTML
-            html_content = _markdown_to_telegram_html(msg.content)
             await self._app.bot.send_message(chat_id=chat_id, text=html_content, parse_mode="HTML")
         except ValueError:
             logger.error(f"Invalid chat_id: {msg.chat_id}")
@@ -227,10 +233,7 @@ class TelegramChannel(BaseChannel):
         user = update.effective_user
         chat_id = message.chat_id
 
-        typing_stop = asyncio.Event()
-        typing_task = None
-        if self._app:
-            typing_task = asyncio.create_task(self._typing_loop(chat_id, typing_stop))
+        self._start_typing(chat_id)
 
         # Use stable numeric ID, but keep username for allowlist compatibility
         sender_id = str(user.id)
@@ -308,39 +311,61 @@ class TelegramChannel(BaseChannel):
         logger.debug(f"Telegram message from {sender_id}: {content[:50]}...")
 
         # Forward to the message bus
-        try:
-            await self._handle_message(
-                sender_id=sender_id,
-                chat_id=str(chat_id),
-                content=content,
-                media=media_paths,
-                metadata={
-                    "message_id": message.message_id,
-                    "user_id": user.id,
-                    "username": user.username,
-                    "first_name": user.first_name,
-                    "is_group": message.chat.type != "private",
-                },
-            )
-        finally:
-            typing_stop.set()
-            if typing_task:
-                await typing_task
+        await self._handle_message(
+            sender_id=sender_id,
+            chat_id=str(chat_id),
+            content=content,
+            media=media_paths,
+            metadata={
+                "message_id": message.message_id,
+                "user_id": user.id,
+                "username": user.username,
+                "first_name": user.first_name,
+                "is_group": message.chat.type != "private",
+            },
+        )
 
-    async def _typing_loop(self, chat_id: int, stop_event: asyncio.Event) -> None:
+    def _start_typing(self, chat_id: int) -> None:
+        if not self._app:
+            return
+        if chat_id in self._typing_tasks:
+            return
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(self._typing_loop(chat_id, stop_event, max_seconds=120))
+        self._typing_tasks[chat_id] = (stop_event, task)
+
+    def _stop_typing(self, chat_id: int) -> None:
+        task_entry = self._typing_tasks.pop(chat_id, None)
+        if not task_entry:
+            return
+        stop_event, task = task_entry
+        stop_event.set()
+        if not task.done():
+            task.cancel()
+
+    async def _typing_loop(
+        self,
+        chat_id: int,
+        stop_event: asyncio.Event,
+        max_seconds: int,
+    ) -> None:
         if not self._app:
             return
 
+        loop = asyncio.get_running_loop()
+        start = loop.time()
         while not stop_event.is_set():
+            if (loop.time() - start) >= max_seconds:
+                return
             try:
                 await self._app.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
             except Exception as e:
                 logger.debug(f"Failed to send typing action: {e}")
                 return
-            await asyncio.wait(
-                [stop_event.wait()],
-                timeout=4.0,
-            )
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=4.0)
+            except asyncio.TimeoutError:
+                continue
 
     def _get_extension(self, media_type: str, mime_type: str | None) -> str:
         """Get file extension based on media type."""

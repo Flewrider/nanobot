@@ -223,8 +223,30 @@ def gateway(
         console.print("Set one in ~/.nanobot/config.json under providers.openrouter.apiKey")
         raise typer.Exit(1)
 
+    provider_keys = {
+        "openrouter": config.providers.openrouter.api_key,
+        "anthropic": config.providers.anthropic.api_key,
+        "openai": config.providers.openai.api_key,
+        "opencode": config.providers.opencode.api_key,
+        "gemini": config.providers.gemini.api_key,
+        "zhipu": config.providers.zhipu.api_key,
+        "groq": config.providers.groq.api_key,
+        "vllm": config.providers.vllm.api_key,
+    }
+    provider_keys = {key: value for key, value in provider_keys.items() if value}
+    provider_bases = {
+        "openrouter": config.providers.openrouter.api_base or "https://openrouter.ai/api/v1",
+        "opencode": config.providers.opencode.api_base,
+        "vllm": config.providers.vllm.api_base,
+    }
+    provider_bases = {key: value for key, value in provider_bases.items() if value}
+
     provider = LiteLLMProvider(
-        api_key=api_key, api_base=api_base, default_model=config.agents.defaults.model
+        api_key=api_key,
+        api_base=api_base,
+        default_model=config.agents.defaults.model.model,
+        provider_keys=provider_keys,
+        provider_bases=provider_bases,
     )
 
     # Create agent
@@ -233,7 +255,8 @@ def gateway(
         provider=provider,
         workspace=config.workspace_path,
         model=config.agents.defaults.model,
-        max_iterations=config.agents.defaults.max_tool_iterations,
+        max_iterations=config.agents.defaults.model.max_tool_iterations,
+        roles=config.agents.roles,
         brave_api_key=config.tools.web.search.api_key or None,
     )
 
@@ -260,7 +283,7 @@ def gateway(
     # Create heartbeat service
     async def on_heartbeat(prompt: str) -> str:
         """Execute heartbeat through the agent."""
-        return await agent.process_direct(prompt, session_key="heartbeat")
+        return await agent.process_heartbeat(prompt)
 
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
@@ -327,14 +350,38 @@ def agent(
         raise typer.Exit(1)
 
     bus = MessageBus()
+    provider_keys = {
+        "openrouter": config.providers.openrouter.api_key,
+        "anthropic": config.providers.anthropic.api_key,
+        "openai": config.providers.openai.api_key,
+        "opencode": config.providers.opencode.api_key,
+        "gemini": config.providers.gemini.api_key,
+        "zhipu": config.providers.zhipu.api_key,
+        "groq": config.providers.groq.api_key,
+        "vllm": config.providers.vllm.api_key,
+    }
+    provider_keys = {key: value for key, value in provider_keys.items() if value}
+    provider_bases = {
+        "openrouter": config.providers.openrouter.api_base or "https://openrouter.ai/api/v1",
+        "opencode": config.providers.opencode.api_base,
+        "vllm": config.providers.vllm.api_base,
+    }
+    provider_bases = {key: value for key, value in provider_bases.items() if value}
+
     provider = LiteLLMProvider(
-        api_key=api_key, api_base=api_base, default_model=config.agents.defaults.model
+        api_key=api_key,
+        api_base=api_base,
+        default_model=config.agents.defaults.model.model,
+        provider_keys=provider_keys,
+        provider_bases=provider_bases,
     )
 
     agent_loop = AgentLoop(
         bus=bus,
         provider=provider,
         workspace=config.workspace_path,
+        model=config.agents.defaults.model,
+        roles=config.agents.roles,
         brave_api_key=config.tools.web.search.api_key or None,
     )
 
@@ -666,7 +713,7 @@ def status():
 
     if config_path.exists():
         config = load_config()
-        console.print(f"Model: {config.agents.defaults.model}")
+        console.print(f"Model: {config.agents.defaults.model.model}")
 
         # Check API keys
         has_openrouter = bool(config.providers.openrouter.api_key)

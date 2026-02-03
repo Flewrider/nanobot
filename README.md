@@ -104,7 +104,13 @@ nanobot onboard
   },
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-opus-4-5"
+      "model": {
+        "model": "anthropic/claude-opus-4-5",
+        "fallbacks": [
+          "openai/gpt-4o",
+          "groq/llama-3.1-70b"
+        ]
+      }
     }
   },
   "webSearch": {
@@ -241,6 +247,43 @@ nanobot gateway
 
 Config file: `~/.nanobot/config.json`
 
+### Model Spec and Fallbacks
+
+You can configure a model with per-model settings and optional fallback models. Fallbacks are tried in order on any model error.
+
+```json
+"agents": {
+  "defaults": {
+    "model": {
+      "model": "anthropic/claude-opus-4-5",
+      "maxTokens": 8192,
+      "temperature": 0.7,
+      "maxToolIterations": 20,
+      "fallbacks": [
+        "openai/gpt-4o",
+        {"model": "opencode/claude-sonnet-4-5", "maxTokens": 4096}
+      ]
+    }
+  }
+}
+```
+
+### Subagent Roles
+
+Define role overrides for subagents (model + tool allow/deny + max tool iterations) and pass `role` when calling the spawn tool.
+
+```json
+"agents": {
+  "roles": {
+    "research": {
+      "model": {"model": "openrouter/sonar"},
+      "toolAllow": ["read_file", "list_dir", "web_search", "web_fetch"],
+      "maxToolIterations": 8
+    }
+  }
+}
+```
+
 ### Providers
 
 > [!NOTE]
@@ -262,7 +305,9 @@ Config file: `~/.nanobot/config.json`
 {
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-opus-4-5"
+      "model": {
+        "model": "anthropic/claude-opus-4-5"
+      }
     }
   },
   "providers": {

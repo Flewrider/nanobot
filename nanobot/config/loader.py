@@ -40,8 +40,10 @@ def load_config(config_path: Path | None = None) -> Config:
                 content = f.read()
             raw = json.loads(_strip_json_comments(content))
             data = convert_keys(raw)
+            data = _coerce_model_spec(data)
             return Config.model_validate(data)
         except ValidationError as e:
+            data = _coerce_model_spec(data)
             data = _coerce_allow_from(data)
             try:
                 print(f"Warning: Config validation error in {path}: {e}")
@@ -79,6 +81,57 @@ def _coerce_allow_from(data: Any) -> Any:
 
     updated_data = dict(data)
     updated_data["channels"] = updated_channels
+    return updated_data
+
+
+def _coerce_model_spec(data: Any) -> Any:
+    """Coerce legacy model fields into the new model spec."""
+    if not isinstance(data, dict):
+        return data
+
+    agents = data.get("agents")
+    if not isinstance(agents, dict):
+        return data
+
+    defaults = agents.get("defaults")
+    if isinstance(defaults, dict):
+        model_value = defaults.get("model")
+        model_spec: dict[str, Any] = {}
+
+        if isinstance(model_value, str):
+            model_spec["model"] = model_value
+        elif isinstance(model_value, dict):
+            model_spec.update(model_value)
+
+        if "max_tokens" in defaults:
+            model_spec.setdefault("max_tokens", defaults.pop("max_tokens"))
+        if "temperature" in defaults:
+            model_spec.setdefault("temperature", defaults.pop("temperature"))
+        if "max_tool_iterations" in defaults:
+            model_spec.setdefault("max_tool_iterations", defaults.pop("max_tool_iterations"))
+
+        if model_spec:
+            defaults = dict(defaults)
+            defaults["model"] = model_spec
+            agents = dict(agents)
+            agents["defaults"] = defaults
+
+    roles = agents.get("roles") if isinstance(agents, dict) else None
+    if isinstance(roles, dict):
+        updated_roles = dict(roles)
+        for role_name, role_value in roles.items():
+            if not isinstance(role_value, dict):
+                continue
+            role_model = role_value.get("model")
+            if isinstance(role_model, str):
+                role_value = dict(role_value)
+                role_value["model"] = {"model": role_model}
+                updated_roles[role_name] = role_value
+        agents = dict(agents)
+        agents["roles"] = updated_roles
+
+    updated_data = dict(data)
+    updated_data["agents"] = agents
     return updated_data
 
 
@@ -154,10 +207,12 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
         return json.dumps(value, ensure_ascii=True)
 
     agents = data["agents"]["defaults"]
+    model_spec = agents["model"]
     channels = data["channels"]
     providers = data["providers"]
     gateway = data["gateway"]
     tools = data["tools"]["web"]["search"]
+    roles = data["agents"].get("roles", {})
 
     return """{
   // Default agent behavior and model selection.
@@ -165,15 +220,22 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
     "defaults": {
       // Filesystem path used by the agent for workspace files.
       "workspace": %s,
-      // Default model for the agent (provider/model).
-      "model": %s,
-      // Maximum tokens per response.
-      "maxTokens": %s,
-      // Sampling temperature (0.0-1.0).
-      "temperature": %s,
-      // Max tool calls per turn.
-      "maxToolIterations": %s
-    }
+      // Default model spec for the agent (provider/model + settings).
+      "model": {
+        // Default model (provider/model).
+        "model": %s,
+        // Maximum tokens per response.
+        "maxTokens": %s,
+        // Sampling temperature (0.0-1.0).
+        "temperature": %s,
+        // Max tool calls per turn.
+        "maxToolIterations": %s,
+        // Optional fallback models (same shape as above, no nested fallbacks).
+        "fallbacks": %s
+      }
+    },
+    // Optional role overrides for subagents.
+    "roles": %s
   },
 
   // Chat channel configuration.
@@ -197,31 +259,31 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
   },
 
   // Provider API keys and base URLs.
-    "providers": {
-      "anthropic": {
-        // Anthropic API key.
-        "apiKey": %s,
-        // Optional API base URL.
-        "apiBase": %s
-      },
-      "openai": {
-        // OpenAI API key.
-        "apiKey": %s,
-        // Optional API base URL.
-        "apiBase": %s
-      },
-      "opencode": {
-        // OpenCode Zen API key.
-        "apiKey": %s,
-        // Optional API base URL (default is https://opencode.ai/zen/v1).
-        "apiBase": %s
-      },
-      "openrouter": {
-        // OpenRouter API key.
-        "apiKey": %s,
-        // Optional API base URL (default is https://openrouter.ai/api/v1).
-        "apiBase": %s
-      },
+  "providers": {
+    "anthropic": {
+      // Anthropic API key.
+      "apiKey": %s,
+      // Optional API base URL.
+      "apiBase": %s
+    },
+    "openai": {
+      // OpenAI API key.
+      "apiKey": %s,
+      // Optional API base URL.
+      "apiBase": %s
+    },
+    "opencode": {
+      // OpenCode Zen API key.
+      "apiKey": %s,
+      // Optional API base URL (default is https://opencode.ai/zen/v1).
+      "apiBase": %s
+    },
+    "openrouter": {
+      // OpenRouter API key.
+      "apiKey": %s,
+      // Optional API base URL (default is https://openrouter.ai/api/v1).
+      "apiBase": %s
+    },
     "groq": {
       // Groq API key.
       "apiKey": %s,
@@ -270,10 +332,12 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
 }
 """ % (
         _json(agents["workspace"]),
-        _json(agents["model"]),
-        _json(agents["maxTokens"]),
-        _json(agents["temperature"]),
-        _json(agents["maxToolIterations"]),
+        _json(model_spec["model"]),
+        _json(model_spec["maxTokens"]),
+        _json(model_spec["temperature"]),
+        _json(model_spec["maxToolIterations"]),
+        _json(model_spec.get("fallbacks", [])),
+        _json(roles),
         _json(channels["whatsapp"]["enabled"]),
         _json(channels["whatsapp"]["bridgeUrl"]),
         _json(channels["whatsapp"]["allowFrom"]),

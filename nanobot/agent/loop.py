@@ -9,7 +9,8 @@ from loguru import logger
 
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
-from nanobot.providers.base import LLMProvider
+from nanobot.providers.base import LLMProvider, LLMResponse
+from nanobot.config.schema import ModelSpec, ModelSpecBase, AgentRole
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
@@ -38,25 +39,29 @@ class AgentLoop:
         bus: MessageBus,
         provider: LLMProvider,
         workspace: Path,
-        model: str | None = None,
-        max_iterations: int = 20,
+        model: ModelSpec | None = None,
+        max_iterations: int | None = None,
+        roles: dict[str, AgentRole] | None = None,
         brave_api_key: str | None = None,
     ):
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
-        self.model = model or provider.get_default_model()
-        self.max_iterations = max_iterations
+        self.model_spec = model or ModelSpec(model=provider.get_default_model())
+        self.max_iterations = max_iterations or self.model_spec.max_tool_iterations
         self.brave_api_key = brave_api_key
 
         self.context = ContextBuilder(workspace)
         self.sessions = SessionManager(workspace)
         self.tools = ToolRegistry()
+        self.subagent_roles = roles or {}
+        self._last_user_context: tuple[str, str] | None = None
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
             bus=bus,
-            model=self.model,
+            model=self.model_spec,
+            roles=self.subagent_roles,
             brave_api_key=brave_api_key,
         )
 
@@ -155,16 +160,29 @@ class AgentLoop:
         logger.info(f"Processing message from {msg.channel}:{msg.sender_id}")
 
         # Get or create session
-        session = self.sessions.get_or_create(msg.session_key)
+        session_key = msg.session_key
+        if msg.channel == "heartbeat" and self._last_user_context:
+            last_channel, last_chat_id = self._last_user_context
+            session_key = f"{last_channel}:{last_chat_id}"
+        session = self.sessions.get_or_create(session_key)
 
         # Update tool contexts
         message_tool = self.tools.get("message")
         if isinstance(message_tool, MessageTool):
-            message_tool.set_context(msg.channel, msg.chat_id)
+            if msg.channel == "heartbeat" and self._last_user_context:
+                message_tool.set_context(*self._last_user_context)
+            else:
+                message_tool.set_context(msg.channel, msg.chat_id)
 
         spawn_tool = self.tools.get("spawn")
         if isinstance(spawn_tool, SpawnTool):
-            spawn_tool.set_context(msg.channel, msg.chat_id)
+            if msg.channel == "heartbeat" and self._last_user_context:
+                spawn_tool.set_context(*self._last_user_context)
+            else:
+                spawn_tool.set_context(msg.channel, msg.chat_id)
+
+        if msg.channel not in {"system", "heartbeat"}:
+            self._last_user_context = (msg.channel, msg.chat_id)
 
         # Build initial messages (use get_history for LLM-formatted messages)
         messages = self.context.build_messages(
@@ -177,12 +195,16 @@ class AgentLoop:
         iteration = 0
         final_content = None
 
+        auto_continue_limit = 3
+        auto_continues = 0
+
         while iteration < self.max_iterations:
             iteration += 1
 
             # Call LLM
-            response = await self.provider.chat(
-                messages=messages, tools=self.tools.get_definitions(), model=self.model
+            response = await self._chat_with_fallback(
+                messages=messages,
+                tools=self.tools.get_definitions(),
             )
 
             # Handle tool calls
@@ -213,6 +235,24 @@ class AgentLoop:
                     )
             else:
                 # No tool calls, we're done
+                if (
+                    msg.channel != "system"
+                    and auto_continues < auto_continue_limit
+                    and self._should_autocontinue(response.content)
+                ):
+                    auto_continues += 1
+                    messages = self.context.add_assistant_message(messages, response.content)
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Continue with the execution now. Do not ask for confirmation. "
+                                "If the task is done, reply with the final result only."
+                            ),
+                        }
+                    )
+                    continue
+
                 final_content = response.content
                 break
 
@@ -270,8 +310,9 @@ class AgentLoop:
         while iteration < self.max_iterations:
             iteration += 1
 
-            response = await self.provider.chat(
-                messages=messages, tools=self.tools.get_definitions(), model=self.model
+            response = await self._chat_with_fallback(
+                messages=messages,
+                tools=self.tools.get_definitions(),
             )
 
             if response.has_tool_calls:
@@ -325,3 +366,79 @@ class AgentLoop:
 
         response = await self._process_message(msg)
         return response.content if response else ""
+
+    async def process_heartbeat(self, content: str) -> str:
+        msg = InboundMessage(
+            channel="heartbeat",
+            sender_id="heartbeat",
+            chat_id="heartbeat",
+            content=content,
+        )
+        response = await self._process_message(msg)
+        return response.content if response else ""
+
+    def _should_autocontinue(self, content: str | None) -> bool:
+        if not content:
+            return False
+        text = content.lower()
+        triggers = [
+            "next step",
+            "next steps",
+            "step 1",
+            "step 2",
+            "plan:",
+            "todo",
+            "to-do",
+            "i will",
+            "i'll",
+            "i am going to",
+            "here's the plan",
+            "checklist",
+            "- [ ]",
+        ]
+        return any(trigger in text for trigger in triggers)
+
+    def _model_candidates(self) -> list[ModelSpecBase]:
+        base = ModelSpecBase(
+            model=self.model_spec.model,
+            max_tokens=self.model_spec.max_tokens,
+            temperature=self.model_spec.temperature,
+            max_tool_iterations=self.model_spec.max_tool_iterations,
+        )
+        return [base, *self.model_spec.fallbacks]
+
+    async def _chat_with_fallback(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMResponse:
+        last_error: LLMResponse | None = None
+        for spec in self._model_candidates():
+            try:
+                response = await self.provider.chat(
+                    messages=messages,
+                    tools=tools,
+                    model=spec.model,
+                    max_tokens=spec.max_tokens,
+                    temperature=spec.temperature,
+                )
+            except Exception as exc:
+                last_error = LLMResponse(
+                    content=f"Error calling LLM: {exc}",
+                    finish_reason="error",
+                )
+                continue
+
+            if response.finish_reason == "error":
+                last_error = response
+                continue
+            if response.content and response.content.startswith("Error calling LLM:"):
+                last_error = response
+                continue
+
+            return response
+
+        return last_error or LLMResponse(
+            content="Error calling LLM: all fallback models failed",
+            finish_reason="error",
+        )

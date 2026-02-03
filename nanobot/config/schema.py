@@ -42,20 +42,69 @@ class ChannelsConfig(BaseModel):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
 
-class AgentDefaults(BaseModel):
-    """Default agent configuration."""
+class ModelSpecBase(BaseModel):
+    """Model configuration without fallbacks."""
 
-    workspace: str = "~/.nanobot/workspace"
     model: str = "anthropic/claude-opus-4-5"
     max_tokens: int = 8192
     temperature: float = 0.7
     max_tool_iterations: int = 20
 
 
+class ModelSpec(ModelSpecBase):
+    """Model configuration with optional fallbacks."""
+
+    fallbacks: list[ModelSpecBase] = Field(default_factory=list)
+
+    @field_validator("fallbacks", mode="before")
+    @classmethod
+    def coerce_fallbacks(cls, value: object) -> object:
+        if isinstance(value, list):
+            updated: list[object] = []
+            for item in value:
+                if isinstance(item, str):
+                    updated.append({"model": item})
+                else:
+                    updated.append(item)
+            return updated
+        return value
+
+
+class AgentDefaults(BaseModel):
+    """Default agent configuration."""
+
+    workspace: str = "~/.nanobot/workspace"
+    model: ModelSpec = Field(default_factory=ModelSpec)
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def coerce_model(cls, value: object) -> object:
+        if isinstance(value, str):
+            return {"model": value}
+        return value
+
+
+class AgentRole(BaseModel):
+    """Role configuration for subagents."""
+
+    model: ModelSpec | None = None
+    tool_allow: list[str] = Field(default_factory=list)
+    tool_deny: list[str] = Field(default_factory=list)
+    max_tool_iterations: int | None = None
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def coerce_role_model(cls, value: object) -> object:
+        if isinstance(value, str):
+            return {"model": value}
+        return value
+
+
 class AgentsConfig(BaseModel):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    roles: dict[str, AgentRole] = Field(default_factory=dict)
 
 
 class ProviderConfig(BaseModel):
@@ -158,10 +207,11 @@ class Config(BaseSettings):
             return self.providers.vllm.api_base
         return None
 
-    def _provider_for_model(self, model: str | None) -> ProviderConfig | None:
-        if not model or "/" not in model:
+    def _provider_for_model(self, model: str | ModelSpec | None) -> ProviderConfig | None:
+        model_id = model.model if isinstance(model, ModelSpec) else model
+        if not model_id or "/" not in model_id:
             return None
-        provider_id = model.split("/", 1)[0].lower()
+        provider_id = model_id.split("/", 1)[0].lower()
         return {
             "openrouter": self.providers.openrouter,
             "anthropic": self.providers.anthropic,
