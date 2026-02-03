@@ -210,6 +210,12 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
         // Optional API base URL.
         "apiBase": %s
       },
+      "opencode": {
+        // OpenCode Zen API key.
+        "apiKey": %s,
+        // Optional API base URL (default is https://opencode.ai/zen/v1).
+        "apiBase": %s
+      },
       "openrouter": {
         // OpenRouter API key.
         "apiKey": %s,
@@ -278,6 +284,8 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
         _json(providers["anthropic"]["apiBase"]),
         _json(providers["openai"]["apiKey"]),
         _json(providers["openai"]["apiBase"]),
+        _json(providers["opencode"]["apiKey"]),
+        _json(providers["opencode"]["apiBase"]),
         _json(providers["openrouter"]["apiKey"]),
         _json(providers["openrouter"]["apiBase"]),
         _json(providers["groq"]["apiKey"]),

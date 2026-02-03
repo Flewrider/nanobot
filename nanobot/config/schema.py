@@ -70,6 +70,7 @@ class ProvidersConfig(BaseModel):
 
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
+    opencode: ProviderConfig = Field(default_factory=ProviderConfig)
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
     groq: ProviderConfig = Field(default_factory=ProviderConfig)
     zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -118,11 +119,16 @@ class Config(BaseSettings):
         return Path(self.agents.defaults.workspace).expanduser()
 
     def get_api_key(self) -> str | None:
-        """Get API key in priority order: OpenRouter > Anthropic > OpenAI > Gemini > Zhipu > Groq > vLLM."""
+        """Get API key using model prefix or priority order."""
+        provider = self._provider_for_model(self.agents.defaults.model)
+        if provider and provider.api_key:
+            return provider.api_key
+
         return (
             self.providers.openrouter.api_key
             or self.providers.anthropic.api_key
             or self.providers.openai.api_key
+            or self.providers.opencode.api_key
             or self.providers.gemini.api_key
             or self.providers.zhipu.api_key
             or self.providers.groq.api_key
@@ -131,14 +137,42 @@ class Config(BaseSettings):
         )
 
     def get_api_base(self) -> str | None:
-        """Get API base URL if using OpenRouter, Zhipu or vLLM."""
+        """Get API base URL for the selected provider."""
+        provider = self._provider_for_model(self.agents.defaults.model)
+        if provider is not None and provider is self.providers.openrouter and provider.api_key:
+            return provider.api_base or "https://openrouter.ai/api/v1"
+        if provider is not None and provider is self.providers.opencode and provider.api_key:
+            return provider.api_base or "https://opencode.ai/zen/v1"
+        if provider is not None and provider is self.providers.zhipu and provider.api_key:
+            return provider.api_base
+        if provider is not None and provider is self.providers.vllm and provider.api_base:
+            return provider.api_base
+
         if self.providers.openrouter.api_key:
             return self.providers.openrouter.api_base or "https://openrouter.ai/api/v1"
+        if self.providers.opencode.api_key:
+            return self.providers.opencode.api_base or "https://opencode.ai/zen/v1"
         if self.providers.zhipu.api_key:
             return self.providers.zhipu.api_base
         if self.providers.vllm.api_base:
             return self.providers.vllm.api_base
         return None
+
+    def _provider_for_model(self, model: str | None) -> ProviderConfig | None:
+        if not model or "/" not in model:
+            return None
+        provider_id = model.split("/", 1)[0].lower()
+        return {
+            "openrouter": self.providers.openrouter,
+            "anthropic": self.providers.anthropic,
+            "openai": self.providers.openai,
+            "opencode": self.providers.opencode,
+            "gemini": self.providers.gemini,
+            "zhipu": self.providers.zhipu,
+            "zai": self.providers.zhipu,
+            "groq": self.providers.groq,
+            "vllm": self.providers.vllm,
+        }.get(provider_id)
 
     class Config:
         env_prefix = "NANOBOT_"
