@@ -2,6 +2,8 @@
 
 import asyncio
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -152,10 +154,29 @@ This file stores important information that should persist across sessions.
 # ============================================================================
 
 
+def _get_tailscale_ip() -> str | None:
+    if not shutil.which("tailscale"):
+        print("Warning: tailscale not found in PATH")
+        return None
+
+    try:
+        output = subprocess.check_output(["tailscale", "ip", "-4"], text=True).strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"Warning: Failed to read Tailscale IP: {exc}")
+        return None
+
+    if not output:
+        print("Warning: Tailscale returned no IPs")
+        return None
+
+    return output.splitlines()[0].strip() or None
+
+
 @app.command()
 def gateway(
     host: str | None = typer.Option(None, "--host", help="Gateway host"),
     port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
+    tailscale: bool = typer.Option(False, "--tailscale", help="Bind to Tailscale IP"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Start the nanobot gateway."""
@@ -175,6 +196,14 @@ def gateway(
 
     config = load_config()
 
+    if tailscale:
+        ts_host = _get_tailscale_ip()
+        if ts_host:
+            if host:
+                console.print("Warning: --tailscale overrides --host")
+            host = ts_host
+        elif host is None:
+            host = config.gateway.host
     if host is None:
         host = config.gateway.host
     if port is None:
