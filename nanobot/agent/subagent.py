@@ -285,32 +285,127 @@ When you have completed the task, provide a clear summary of your findings or ac
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         model_spec: ModelSpec,
+        max_retries: int = 3,
+        retry_delay: float = 15.0,
     ) -> LLMResponse:
+        """
+        Call LLM with retry logic for transient errors and fallback to other models.
+
+        Transient errors (503, 429, 500, etc.) are retried with delay.
+        Permanent failures trigger fallback to next configured model.
+        """
+        import asyncio
+
         last_error: LLMResponse | None = None
+
         for spec in self._model_candidates(model_spec):
-            try:
-                response = await self.provider.chat(
-                    messages=messages,
-                    tools=tools,
-                    model=spec.model,
-                    max_tokens=spec.max_tokens,
-                    temperature=spec.temperature,
-                )
-            except Exception as exc:
-                last_error = LLMResponse(
-                    content=f"Error calling LLM: {exc}",
-                    finish_reason="error",
-                )
-                continue
+            # Retry loop for transient errors on this model
+            for attempt in range(max_retries):
+                try:
+                    response = await self.provider.chat(
+                        messages=messages,
+                        tools=tools,
+                        model=spec.model,
+                        max_tokens=spec.max_tokens,
+                        temperature=spec.temperature,
+                    )
+                except Exception as exc:
+                    error_str = str(exc).lower()
+                    # Check if transient error (503, 429, 500, timeout, etc.)
+                    is_transient = any(
+                        code in error_str
+                        for code in [
+                            "503",
+                            "429",
+                            "500",
+                            "502",
+                            "504",
+                            "timeout",
+                            "rate limit",
+                            "overloaded",
+                            "temporarily unavailable",
+                            "internal server error",
+                        ]
+                    )
 
-            if response.finish_reason == "error":
-                last_error = response
-                continue
-            if response.content and response.content.startswith("Error calling LLM:"):
-                last_error = response
-                continue
+                    if is_transient and attempt < max_retries - 1:
+                        delay = retry_delay * (attempt + 1)  # Exponential backoff
+                        logger.warning(
+                            f"Transient error on {spec.model}, retrying in {delay}s "
+                            f"(attempt {attempt + 1}/{max_retries}): {exc}"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
 
-            return response
+                    last_error = LLMResponse(
+                        content=f"Error calling LLM: {exc}",
+                        finish_reason="error",
+                    )
+                    break  # Move to next model
+
+                # Check response for error content
+                if response.finish_reason == "error":
+                    error_content = response.content or ""
+                    is_transient = any(
+                        code in error_content.lower()
+                        for code in [
+                            "503",
+                            "429",
+                            "500",
+                            "502",
+                            "504",
+                            "timeout",
+                            "rate limit",
+                            "overloaded",
+                        ]
+                    )
+
+                    if is_transient and attempt < max_retries - 1:
+                        delay = retry_delay * (attempt + 1)
+                        logger.warning(
+                            f"Transient error response on {spec.model}, retrying in {delay}s "
+                            f"(attempt {attempt + 1}/{max_retries})"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    last_error = response
+                    break  # Move to next model
+
+                if response.content and response.content.startswith("Error calling LLM:"):
+                    error_content = response.content.lower()
+                    is_transient = any(
+                        code in error_content
+                        for code in [
+                            "503",
+                            "429",
+                            "500",
+                            "502",
+                            "504",
+                            "timeout",
+                            "rate limit",
+                            "overloaded",
+                        ]
+                    )
+
+                    if is_transient and attempt < max_retries - 1:
+                        delay = retry_delay * (attempt + 1)
+                        logger.warning(
+                            f"Transient error on {spec.model}, retrying in {delay}s "
+                            f"(attempt {attempt + 1}/{max_retries})"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    last_error = response
+                    break  # Move to next model
+
+                # Success!
+                return response
+
+            # If we broke out of retry loop, try next model
+            if last_error:
+                logger.info(f"Falling back from {spec.model} to next model")
 
         return last_error or LLMResponse(
             content="Error calling LLM: all fallback models failed",
