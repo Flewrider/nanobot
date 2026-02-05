@@ -31,6 +31,24 @@ class Session:
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
+    def mark_processing(self, content: str) -> None:
+        """Mark that we're processing a user message (for crash recovery)."""
+        self.metadata["processing"] = {
+            "started_at": datetime.now().isoformat(),
+            "content": content[:200],  # Store truncated content for context
+        }
+
+    def clear_processing(self) -> None:
+        """Clear the processing flag (task completed successfully)."""
+        self.metadata.pop("processing", None)
+
+    def get_interrupted_task(self) -> str | None:
+        """Check if there was an interrupted task. Returns the content or None."""
+        processing = self.metadata.get("processing")
+        if processing:
+            return processing.get("content")
+        return None
+
     def get_history(self, max_messages: int = 15) -> list[dict[str, Any]]:
         """
         Get message history for LLM context.
@@ -203,3 +221,29 @@ class SessionManager:
                 continue
 
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
+
+    def get_interrupted_sessions(self) -> list[tuple[str, str]]:
+        """
+        Find sessions that were interrupted mid-processing (e.g., due to OOM/crash).
+
+        Returns:
+            List of (session_key, interrupted_content) tuples.
+        """
+        interrupted = []
+
+        for path in self.sessions_dir.glob("*.jsonl"):
+            try:
+                with open(path) as f:
+                    first_line = f.readline().strip()
+                    if first_line:
+                        data = json.loads(first_line)
+                        if data.get("_type") == "metadata":
+                            processing = data.get("metadata", {}).get("processing")
+                            if processing:
+                                key = path.stem.replace("_", ":", 1)  # telegram_123 -> telegram:123
+                                content = processing.get("content", "continue")
+                                interrupted.append((key, content))
+            except Exception:
+                continue
+
+        return interrupted

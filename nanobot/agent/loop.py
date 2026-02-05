@@ -100,6 +100,9 @@ class AgentLoop:
         self._running = True
         logger.info("Agent loop started")
 
+        # Check for interrupted sessions (e.g., from OOM/crash) and auto-resume
+        await self._recover_interrupted_sessions()
+
         while self._running:
             try:
                 # Wait for next message
@@ -146,6 +149,55 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
+    async def _recover_interrupted_sessions(self) -> None:
+        """
+        Check for sessions that were interrupted mid-processing (e.g., OOM/crash).
+
+        Sends a recovery message to continue the interrupted task.
+        """
+        interrupted = self.sessions.get_interrupted_sessions()
+
+        if not interrupted:
+            return
+
+        logger.info(f"Found {len(interrupted)} interrupted session(s), attempting recovery...")
+
+        for session_key, content in interrupted:
+            try:
+                # Parse channel and chat_id from session key
+                if ":" in session_key:
+                    channel, chat_id = session_key.split(":", 1)
+                else:
+                    continue
+
+                # Create a recovery message
+                recovery_content = (
+                    f"[System: Your previous task was interrupted (possibly due to a crash or memory issue). "
+                    f"The task was: '{content}...' Please continue where you left off or report what went wrong.]"
+                )
+
+                # Create an inbound message to process
+                recovery_msg = InboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    sender_id=chat_id,
+                    content=recovery_content,
+                )
+
+                logger.info(f"Recovering interrupted session: {session_key}")
+
+                # Process and send response
+                response = await self._process_message(recovery_msg)
+                if response:
+                    await self.bus.publish_outbound(response)
+
+            except Exception as e:
+                logger.error(f"Failed to recover session {session_key}: {e}")
+                # Clear the processing flag to avoid infinite recovery loops
+                session = self.sessions.get_or_create(session_key)
+                session.clear_processing()
+                self.sessions.save(session)
+
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a single inbound message.
@@ -187,6 +239,11 @@ class AgentLoop:
 
         if msg.channel not in {"system", "heartbeat"}:
             self._last_user_context = (msg.channel, msg.chat_id)
+
+        # Mark that we're processing this message (for crash recovery)
+        if msg.channel not in {"system", "heartbeat"}:
+            session.mark_processing(msg.content)
+            self.sessions.save(session)
 
         # Build initial messages (use get_history for LLM-formatted messages)
         messages = self.context.build_messages(
@@ -338,9 +395,10 @@ class AgentLoop:
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        # Save to session
+        # Save to session and clear processing flag (task completed)
         session.add_message("user", msg.content)
         session.add_message("assistant", final_content)
+        session.clear_processing()
         self.sessions.save(session)
 
         return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=final_content)
