@@ -156,8 +156,7 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
 
         # Current message (with optional image attachments)
         user_content = self._build_user_content(current_message, media)
-        if isinstance(user_content, list):
-            messages.append({"role": "user", "content": user_content})
+        messages.append({"role": "user", "content": user_content})
 
         return messages
 
