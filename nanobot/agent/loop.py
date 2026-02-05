@@ -204,10 +204,25 @@ class AgentLoop:
         while iteration < self.max_iterations:
             iteration += 1
 
-            # Call LLM
+            # If we're at the last iteration, ask for final summary without tools
+            at_limit = iteration >= self.max_iterations
+
+            if at_limit:
+                # Add a message asking for final summary
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You have reached the maximum number of tool calls. "
+                            "Please provide a final summary of what you accomplished and any remaining tasks."
+                        ),
+                    }
+                )
+
+            # Call LLM (no tools on final iteration to force a text response)
             response = await self._chat_with_fallback(
                 messages=messages,
-                tools=self.tools.get_definitions(),
+                tools=None if at_limit else self.tools.get_definitions(),
             )
 
             # Handle tool calls
