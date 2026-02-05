@@ -331,7 +331,7 @@ class TelegramChannel(BaseChannel):
         if chat_id in self._typing_tasks:
             return
         stop_event = asyncio.Event()
-        task = asyncio.create_task(self._typing_loop(chat_id, stop_event, max_seconds=120))
+        task = asyncio.create_task(self._typing_loop(chat_id, stop_event, max_seconds=600))
         self._typing_tasks[chat_id] = (stop_event, task)
 
     def _stop_typing(self, chat_id: int) -> None:
