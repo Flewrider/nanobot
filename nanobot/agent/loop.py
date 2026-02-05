@@ -18,6 +18,7 @@ from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.spawn import SpawnTool
+from nanobot.agent.tools.media import AnalyzeMediaTool, parse_media_injection, build_media_content
 from nanobot.agent.subagent import SubagentManager
 from nanobot.session.manager import SessionManager
 
@@ -90,6 +91,9 @@ class AgentLoop:
         # Spawn tool (for subagents)
         spawn_tool = SpawnTool(manager=self.subagents)
         self.tools.register(spawn_tool)
+
+        # Media analysis tool (video, audio, image)
+        self.tools.register(AnalyzeMediaTool())
 
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -244,15 +248,39 @@ class AgentLoop:
                 )
 
                 # Execute tools
+                pending_media = []  # Collect media injections to add after tool results
                 for tool_call in response.tool_calls:
                     args_str = json.dumps(tool_call.arguments)
                     logger.debug(f"Executing tool: {tool_call.name} with arguments: {args_str}")
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
-                    messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
-                    )
+
+                    # Check if this is a media injection request
+                    media_data = parse_media_injection(result)
+                    if media_data:
+                        # Add a placeholder result, queue the media for injection
+                        path = media_data.get("path", "unknown")
+                        media_type = media_data.get("media_type", "media")
+                        size_mb = media_data.get("size_bytes", 0) / (1024 * 1024)
+                        placeholder = f"[Analyzing {media_type}: {path} ({size_mb:.1f}MB)]"
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, placeholder
+                        )
+                        pending_media.append(media_data)
+                        logger.debug(f"Media injection queued: {media_type} from {path}")
+                    else:
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, result
+                        )
+
                     if tool_call.name == "message":
                         message_tool_used = True
+
+                # Inject any pending media as a user message for the next LLM call
+                if pending_media:
+                    for media_data in pending_media:
+                        media_content = build_media_content(media_data)
+                        messages.append({"role": "user", "content": media_content})
+                        logger.debug(f"Injected {media_data['media_type']} into messages")
             else:
                 # No tool calls, we're done
                 if (
