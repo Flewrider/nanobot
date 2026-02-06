@@ -142,22 +142,40 @@ def test_recent_large_output_not_truncated(pruner):
 
 
 def test_truncate_large_output_after_age(pruner):
-    """Large outputs should be truncated only after at least 1 turn has passed."""
+    """Large outputs should be truncated only after at least 2 turns have passed."""
     large_content = "x" * 5000
     messages = [
         {"role": "user", "content": "Q1"},
         _tool_msg("read_file", large_content, "tc_old"),
         {"role": "user", "content": "Q2"},
         _tool_msg("read_file", "small recent 1", "tc_r1"),
+        {"role": "user", "content": "Q3"},
         _tool_msg("read_file", "small recent 2", "tc_r2"),
         _tool_msg("read_file", "small recent 3", "tc_r3"),
     ]
     # tc_old is not in recent_ids (4 results, keep_recent=3)
-    # turn_age = 3-1 = 2, which is >= 1 but < threshold 3, so truncate
+    # turn_age = 3-1 = 2, which is >= 2 but < threshold 3 for summary, so truncate
     result = pruner.prune(messages, current_turn=3)
     tool_msgs = [m for m in result if m.get("role") == "tool"]
     assert len(tool_msgs[0]["content"]) < len(large_content)
     assert "truncated" in tool_msgs[0]["content"]
+
+
+def test_no_truncate_within_2_turns(pruner):
+    """Large outputs within 2 turns should NOT be truncated."""
+    large_content = "x" * 5000
+    messages = [
+        {"role": "user", "content": "Q1"},
+        _tool_msg("read_file", large_content, "tc_old"),
+        {"role": "user", "content": "Q2"},
+        _tool_msg("read_file", "r1", "tc_r1"),
+        _tool_msg("read_file", "r2", "tc_r2"),
+        _tool_msg("read_file", "r3", "tc_r3"),
+    ]
+    # tc_old turn_age = 2-1 = 1, which is < 2, so no truncation
+    result = pruner.prune(messages, current_turn=2)
+    tool_msgs = [m for m in result if m.get("role") == "tool"]
+    assert tool_msgs[0]["content"] == large_content
 
 
 # ---- _create_summary() ----

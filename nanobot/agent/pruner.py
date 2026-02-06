@@ -86,7 +86,7 @@ class ContextPruner:
                 chars_saved += len(content) - len(summary)
                 messages_pruned += 1
                 pruned.append({**msg, "content": summary})
-            elif turn_age >= 1 and len(content) > self.LARGE_OUTPUT_THRESHOLD:
+            elif turn_age >= 2 and len(content) > self.LARGE_OUTPUT_THRESHOLD:
                 # Only truncate large outputs after at least 1 turn has passed
                 truncated = self._truncate(content)
                 chars_saved += len(content) - len(truncated)
