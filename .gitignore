@@ -22,3 +22,8 @@ nanobot/skills/*
 !nanobot/skills/summarize/**
 !nanobot/skills/weather/**
 !nanobot/skills/tmux/**
+
+# Local tooling
+.claude/
+.opencode/
+nul
