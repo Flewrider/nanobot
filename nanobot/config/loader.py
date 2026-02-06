@@ -103,12 +103,19 @@ def _coerce_model_spec(data: Any) -> Any:
         elif isinstance(model_value, dict):
             model_spec.update(model_value)
 
+        # Handle both snake_case and camelCase variants
         if "max_tokens" in defaults:
             model_spec.setdefault("max_tokens", defaults.pop("max_tokens"))
+        if "maxTokens" in defaults:
+            model_spec.setdefault("max_tokens", defaults.pop("maxTokens"))
         if "temperature" in defaults:
             model_spec.setdefault("temperature", defaults.pop("temperature"))
         if "max_tool_iterations" in defaults:
             model_spec.setdefault("max_tool_iterations", defaults.pop("max_tool_iterations"))
+        if "maxToolIterations" in defaults:
+            model_spec.setdefault("max_tool_iterations", defaults.pop("maxToolIterations"))
+        if "fallbacks" in defaults:
+            model_spec.setdefault("fallbacks", defaults.pop("fallbacks"))
 
         if model_spec:
             defaults = dict(defaults)

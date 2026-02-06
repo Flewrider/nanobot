@@ -64,6 +64,14 @@ class ModelSpec(ModelSpecBase):
             for item in value:
                 if isinstance(item, str):
                     updated.append({"model": item})
+                elif isinstance(item, dict):
+                    # Convert camelCase to snake_case
+                    converted = dict(item)
+                    if "maxTokens" in converted:
+                        converted["max_tokens"] = converted.pop("maxTokens")
+                    if "maxToolIterations" in converted:
+                        converted["max_tool_iterations"] = converted.pop("maxToolIterations")
+                    updated.append(converted)
                 else:
                     updated.append(item)
             return updated
