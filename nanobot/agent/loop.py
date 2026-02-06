@@ -21,6 +21,7 @@ from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.spawn import SpawnTool
+from nanobot.agent.tools.delegate import DelegateTool
 from nanobot.agent.tools.media import (
     AnalyzeMediaTool,
     parse_media_injection,
@@ -52,21 +53,23 @@ class AgentLoop:
         max_iterations: int | None = None,
         roles: dict[str, AgentRole] | None = None,
         brave_api_key: str | None = None,
+        claude_max_provider: LLMProvider | None = None,
     ):
         self.bus = bus
         self.provider = provider
+        self.claude_max_provider = claude_max_provider
         self.workspace = workspace
         self.model_spec = model or ModelSpec(model=provider.get_default_model())
         self.max_iterations = max_iterations or self.model_spec.max_tool_iterations
         self.brave_api_key = brave_api_key
 
-        self.context = ContextBuilder(workspace)
+        self.subagent_roles = roles or {}
+        self.context = ContextBuilder(workspace, roles=self.subagent_roles)
         self.sessions = SessionManager(workspace)
         self.tools = ToolRegistry()
         self.token_counter = TokenCounter()
         self.compactor = Compactor(provider=provider, token_counter=self.token_counter)
         self.pruner = ContextPruner()
-        self.subagent_roles = roles or {}
         self._last_user_context: tuple[str, str] | None = None
         self.subagents = SubagentManager(
             provider=provider,
@@ -75,6 +78,7 @@ class AgentLoop:
             model=self.model_spec,
             roles=self.subagent_roles,
             brave_api_key=brave_api_key,
+            claude_max_provider=claude_max_provider,
         )
 
         self._running = False
@@ -99,9 +103,13 @@ class AgentLoop:
         message_tool = MessageTool(send_callback=self.bus.publish_outbound)
         self.tools.register(message_tool)
 
-        # Spawn tool (for subagents)
+        # Spawn tool (for background subagents)
         spawn_tool = SpawnTool(manager=self.subagents)
         self.tools.register(spawn_tool)
+
+        # Delegate tool (synchronous specialist agents)
+        delegate_tool = DelegateTool(manager=self.subagents)
+        self.tools.register(delegate_tool)
 
         # Media analysis tool (video, audio, image)
         self.tools.register(AnalyzeMediaTool())
@@ -375,9 +383,34 @@ class AgentLoop:
                     messages, response.content, tool_call_dicts
                 )
 
-                # Execute tools
+                # Execute tools — run delegate calls in parallel, others sequentially
+                delegate_calls = [tc for tc in response.tool_calls if tc.name == "delegate"]
+                other_calls = [tc for tc in response.tool_calls if tc.name != "delegate"]
+
+                # Run delegate calls in parallel
+                if delegate_calls:
+                    for tc in delegate_calls:
+                        args_str = json.dumps(tc.arguments)
+                        logger.debug(f"Executing tool: {tc.name} with arguments: {args_str}")
+                        recent_tools.append(f"{tc.name}: {args_str[:100]}")
+                        if len(recent_tools) > 5:
+                            recent_tools.pop(0)
+
+                    if not is_heartbeat and msg.channel != "system":
+                        session.mark_processing(msg.content, " | ".join(recent_tools))
+                        self.sessions.save(session)
+
+                    delegate_results = await asyncio.gather(
+                        *[self.tools.execute(tc.name, tc.arguments) for tc in delegate_calls]
+                    )
+                    for tc, result in zip(delegate_calls, delegate_results):
+                        messages = self.context.add_tool_result(
+                            messages, tc.id, tc.name, result
+                        )
+
+                # Run other calls sequentially
                 pending_media = []  # Collect media injections to add after tool results
-                for tool_call in response.tool_calls:
+                for tool_call in other_calls:
                     args_str = json.dumps(tool_call.arguments)
                     logger.debug(f"Executing tool: {tool_call.name} with arguments: {args_str}")
 
@@ -709,6 +742,11 @@ class AgentLoop:
         candidates = self._model_candidates()
 
         for i, spec in enumerate(candidates):
+            # Route claude_max/ models to the ClaudeMaxProvider
+            provider = self.provider
+            if spec.model.startswith("claude_max/") and self.claude_max_provider:
+                provider = self.claude_max_provider
+
             # Check if model supports media - if not, strip media from messages
             if model_supports_media(spec.model):
                 model_messages = messages
@@ -719,7 +757,7 @@ class AgentLoop:
             # Retry loop for transient errors on this model
             for attempt in range(max_retries):
                 try:
-                    response = await self.provider.chat(
+                    response = await provider.chat(
                         messages=model_messages,
                         tools=tools,
                         model=spec.model,

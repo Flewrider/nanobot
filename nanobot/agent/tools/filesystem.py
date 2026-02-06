@@ -5,6 +5,27 @@ from typing import Any
 
 from nanobot.agent.tools.base import Tool
 
+# Paths the agent is never allowed to read (prevents credential leakage)
+DENIED_PATHS = [
+    "~/.nanobot/config.json",
+    "~/.openclaw/",
+    "~/.claude/",
+    ".env",
+    "/etc/environment",
+    "/etc/shadow",
+]
+
+
+def _is_path_denied(path: str) -> bool:
+    """Check whether *path* matches any entry in the deny list."""
+    resolved = Path(path).expanduser().resolve()
+    for denied in DENIED_PATHS:
+        denied_path = Path(denied).expanduser().resolve()
+        # Exact match or the resolved path is inside a denied directory
+        if resolved == denied_path or str(resolved).startswith(str(denied_path) + "/") or str(resolved).startswith(str(denied_path) + "\\"):
+            return True
+    return False
+
 
 class ReadFileTool(Tool):
     """Tool to read file contents."""
@@ -31,13 +52,16 @@ class ReadFileTool(Tool):
         }
     
     async def execute(self, path: str, **kwargs: Any) -> str:
+        if _is_path_denied(path):
+            return "Access denied: cannot read sensitive system files"
+
         try:
             file_path = Path(path).expanduser()
             if not file_path.exists():
                 return f"Error: File not found: {path}"
             if not file_path.is_file():
                 return f"Error: Not a file: {path}"
-            
+
             content = file_path.read_text(encoding="utf-8")
             return content
         except PermissionError:

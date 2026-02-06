@@ -5,8 +5,10 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
+from nanobot.agent.agents import AgentDef, get_builtin_agents, resolve_agent
 from nanobot.agent.memory import MemoryManager
 from nanobot.agent.skills import SkillsLoader
+from nanobot.config.schema import AgentRole
 
 
 class ContextBuilder:
@@ -19,10 +21,11 @@ class ContextBuilder:
 
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, roles: dict[str, AgentRole] | None = None):
         self.workspace = workspace
         self.memory = MemoryManager(workspace)
         self.skills = SkillsLoader(workspace)
+        self._roles = roles or {}
 
     def build_system_prompt(
         self, current_message: str, skill_names: list[str] | None = None
@@ -65,6 +68,11 @@ class ContextBuilder:
             tmux_content = self.skills._strip_frontmatter(tmux_content)
             if tmux_content:
                 parts.append(f"# tmux skill\n\n{tmux_content}")
+
+        # Agent delegation section
+        agents_section = self._build_agents_section()
+        if agents_section:
+            parts.append(agents_section)
 
         parts.append(f"# Current User Request\n\n{current_message}")
 
@@ -132,6 +140,62 @@ Always be helpful, accurate, and concise. When using tools, explain what you're 
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
+
+    def _build_agents_section(self) -> str:
+        """Build the <Agents> and <Delegation Rules> sections for the system prompt."""
+        builtins = get_builtin_agents()
+        # Also consider custom roles
+        all_names = set(builtins.keys())
+        for role_name in self._roles:
+            all_names.add(role_name)
+
+        if not all_names:
+            return ""
+
+        lines = ["<Agents>\n"]
+        for name in sorted(all_names):
+            agent = resolve_agent(name, self._roles)
+            if agent is None:
+                continue
+            lines.append(f"@{agent.name}")
+            lines.append(f"- Role: {agent.description}")
+            lines.append("")
+
+        # Specific delegation guidance for built-in agents
+        if "explorer" in all_names:
+            lines.append("@explorer delegation guidance:")
+            lines.append("- Delegate when: Need to discover files, find patterns, explore unknowns, multiple searches")
+            lines.append("- Don't delegate when: Know the exact path and just need to read one file")
+            lines.append("")
+        if "researcher" in all_names:
+            lines.append("@researcher delegation guidance:")
+            lines.append("- Delegate when: Need official docs, library APIs, external info, unfamiliar libraries")
+            lines.append("- Don't delegate when: General knowledge you're confident about, standard language features")
+            lines.append("")
+        if "coder" in all_names:
+            lines.append("@coder delegation guidance:")
+            lines.append("- Delegate when: Writing/editing code, multi-file changes, complex implementations, testing")
+            lines.append("- Don't delegate when: Simple text answers, trivial fixes you can do yourself")
+            lines.append("")
+        if "thinker" in all_names:
+            lines.append("@thinker delegation guidance:")
+            lines.append("- Delegate when: Architecture decisions, persistent bugs (2+ failed attempts), high-stakes tradeoffs, complex debugging")
+            lines.append("- Don't delegate when: Routine decisions, first attempt at any problem, tactical 'how' questions")
+            lines.append("")
+
+        lines.append("</Agents>")
+        lines.append("")
+        lines.append("<Delegation Rules>")
+        lines.append("- Simple questions/greetings -> answer directly, no delegation needed")
+        lines.append("- Use the 'delegate' tool to send work to specialists and get results back")
+        lines.append("- You can call 'delegate' multiple times in one response to run agents in PARALLEL")
+        lines.append("- Use the 'spawn' tool only for truly background tasks that don't need immediate results")
+        lines.append("- Provide file paths and context summaries to agents, don't paste full file contents")
+        lines.append("- Skip delegation if explaining the task would take longer than doing it yourself")
+        lines.append("- When a task needs research then implementation: delegate to @explorer first, then pass findings to @coder")
+        lines.append("</Delegation Rules>")
+
+        return "\n".join(lines)
 
     def build_messages(
         self,

@@ -99,6 +99,7 @@ class AgentRole(BaseModel):
     """Role configuration for subagents."""
 
     model: ModelSpec | None = None
+    system_prompt: str | None = None
     tool_allow: list[str] = Field(default_factory=list)
     tool_deny: list[str] = Field(default_factory=list)
     max_tool_iterations: int | None = None
@@ -125,6 +126,13 @@ class ProviderConfig(BaseModel):
     api_base: str | None = None
 
 
+class ClaudeMaxConfig(BaseModel):
+    """Claude Max CLI provider configuration."""
+
+    enabled: bool = False
+    cli_path: str = "claude"  # Path to claude CLI binary
+
+
 class ProvidersConfig(BaseModel):
     """Configuration for LLM providers."""
 
@@ -136,6 +144,7 @@ class ProvidersConfig(BaseModel):
     zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
     gemini: ProviderConfig = Field(default_factory=ProviderConfig)
+    claude_max: ClaudeMaxConfig = Field(default_factory=ClaudeMaxConfig)
 
 
 class GatewayConfig(BaseModel):

@@ -1,8 +1,25 @@
 """Tool registry for dynamic tool management."""
 
+import re
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
+
+# Patterns that look like API keys — redacted before results reach the LLM
+_KEY_PATTERNS = [
+    re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}"),   # Anthropic
+    re.compile(r"sk-or-[A-Za-z0-9_-]{20,}"),     # OpenRouter
+    re.compile(r"sk-[A-Za-z0-9_-]{20,}"),         # OpenAI / generic
+    re.compile(r"gsk_[A-Za-z0-9_-]{20,}"),        # Groq
+    re.compile(r"AIza[A-Za-z0-9_-]{20,}"),        # Google / Gemini
+]
+
+
+def redact_api_keys(text: str) -> str:
+    """Replace anything that looks like an API key with ``[REDACTED]``."""
+    for pattern in _KEY_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text
 
 
 class ToolRegistry:
@@ -54,9 +71,10 @@ class ToolRegistry:
             return f"Error: Tool '{name}' not found"
         
         try:
-            return await tool.execute(**params)
+            result = await tool.execute(**params)
+            return redact_api_keys(result)
         except Exception as e:
-            return f"Error executing {name}: {str(e)}"
+            return redact_api_keys(f"Error executing {name}: {str(e)}")
     
     @property
     def tool_names(self) -> list[str]:

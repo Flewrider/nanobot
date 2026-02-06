@@ -6,6 +6,30 @@ from typing import Any
 
 from nanobot.agent.tools.base import Tool
 
+# Env vars stripped from subprocesses to prevent credential leakage
+SENSITIVE_ENV_VARS = [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GROQ_API_KEY",
+    "ZHIPUAI_API_KEY",
+    "OPENCLAW_GATEWAY_TOKEN",
+    "BRAVE_API_KEY",
+]
+
+
+def _build_clean_env() -> dict[str, str]:
+    """Return a copy of os.environ with sensitive keys removed."""
+    env = os.environ.copy()
+    for key in SENSITIVE_ENV_VARS:
+        env.pop(key, None)
+    # Also strip anything matching NANOBOT_PROVIDERS__*
+    for key in list(env.keys()):
+        if key.startswith("NANOBOT_PROVIDERS__"):
+            del env[key]
+    return env
+
 
 class ExecTool(Tool):
     """Tool to execute shell commands."""
@@ -55,6 +79,7 @@ class ExecTool(Tool):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                env=_build_clean_env(),
             )
 
             try:

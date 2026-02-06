@@ -218,9 +218,10 @@ def gateway(
     api_key = config.get_api_key()
     api_base = config.get_api_base()
 
-    if not api_key:
+    if not api_key and not config.providers.claude_max.enabled:
         console.print("[red]Error: No API key configured.[/red]")
         console.print("Set one in ~/.nanobot/config.json under providers.openrouter.apiKey")
+        console.print("Or enable Claude Max: providers.claudeMax.enabled = true")
         raise typer.Exit(1)
 
     provider_keys = {
@@ -249,6 +250,16 @@ def gateway(
         provider_bases=provider_bases,
     )
 
+    # Create Claude Max provider if enabled
+    claude_max_provider = None
+    if config.providers.claude_max.enabled:
+        from nanobot.providers.claude_max import ClaudeMaxProvider
+
+        claude_max_provider = ClaudeMaxProvider(
+            cli_path=config.providers.claude_max.cli_path,
+        )
+        console.print(f"[green]\u2713[/green] Claude Max provider enabled")
+
     # Create agent
     agent = AgentLoop(
         bus=bus,
@@ -258,6 +269,7 @@ def gateway(
         max_iterations=config.agents.defaults.model.max_tool_iterations,
         roles=config.agents.roles,
         brave_api_key=config.tools.web.search.api_key or None,
+        claude_max_provider=claude_max_provider,
     )
 
     # Create cron service
@@ -341,7 +353,7 @@ def agent(
     api_key = config.get_api_key()
     api_base = config.get_api_base()
 
-    if not api_key:
+    if not api_key and not config.providers.claude_max.enabled:
         console.print("[red]Error: No API key configured.[/red]")
         raise typer.Exit(1)
 
@@ -372,6 +384,15 @@ def agent(
         provider_bases=provider_bases,
     )
 
+    # Create Claude Max provider if enabled
+    claude_max_provider = None
+    if config.providers.claude_max.enabled:
+        from nanobot.providers.claude_max import ClaudeMaxProvider
+
+        claude_max_provider = ClaudeMaxProvider(
+            cli_path=config.providers.claude_max.cli_path,
+        )
+
     agent_loop = AgentLoop(
         bus=bus,
         provider=provider,
@@ -379,6 +400,7 @@ def agent(
         model=config.agents.defaults.model,
         roles=config.agents.roles,
         brave_api_key=config.tools.web.search.api_key or None,
+        claude_max_provider=claude_max_provider,
     )
 
     if message:
@@ -727,11 +749,16 @@ def status():
         console.print(f"OpenAI API: {'[green]✓[/green]' if has_openai else '[dim]not set[/dim]'}")
         console.print(f"Gemini API: {'[green]✓[/green]' if has_gemini else '[dim]not set[/dim]'}")
         vllm_status = (
-            f"[green]✓ {config.providers.vllm.api_base}[/green]"
+            f"[green]\u2713 {config.providers.vllm.api_base}[/green]"
             if has_vllm
             else "[dim]not set[/dim]"
         )
         console.print(f"vLLM/Local: {vllm_status}")
+
+        has_claude_max = config.providers.claude_max.enabled
+        console.print(
+            f"Claude Max: {'[green]\u2713[/green]' if has_claude_max else '[dim]not enabled[/dim]'}"
+        )
 
 
 if __name__ == "__main__":

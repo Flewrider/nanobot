@@ -1,4 +1,4 @@
-"""Subagent manager for background task execution."""
+"""Subagent manager for background task execution and synchronous delegation."""
 
 import asyncio
 import json
@@ -12,6 +12,7 @@ from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider, LLMResponse
 from nanobot.config.schema import ModelSpec, ModelSpecBase, AgentRole
+from nanobot.agent.agents import resolve_agent, AgentDef
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from nanobot.agent.tools.shell import ExecTool
@@ -20,11 +21,14 @@ from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
 
 class SubagentManager:
     """
-    Manages background subagent execution.
+    Manages background subagent execution and synchronous delegation.
 
     Subagents are lightweight agent instances that run in the background
     to handle specific tasks. They share the same LLM provider but have
     isolated context and a focused system prompt.
+
+    The ``delegate()`` method runs an agent synchronously (blocking) and
+    returns the result directly — used by the ``delegate`` tool.
     """
 
     def __init__(
@@ -35,8 +39,10 @@ class SubagentManager:
         model: ModelSpec | None = None,
         roles: dict[str, AgentRole] | None = None,
         brave_api_key: str | None = None,
+        claude_max_provider: LLMProvider | None = None,
     ):
         self.provider = provider
+        self.claude_max_provider = claude_max_provider
         self.workspace = workspace
         self.bus = bus
         self.model_spec = model or ModelSpec(model=provider.get_default_model())
@@ -86,6 +92,151 @@ class SubagentManager:
 
         logger.info(f"Spawned subagent [{task_id}]: {display_label}")
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
+
+    def _provider_for_model(self, model: str) -> LLMProvider:
+        """Return the correct provider based on model prefix."""
+        if model.startswith("claude_max/") and self.claude_max_provider:
+            return self.claude_max_provider
+        return self.provider
+
+    async def delegate(
+        self,
+        agent_name: str,
+        task: str,
+        context: str = "",
+    ) -> str:
+        """
+        Run a specialist agent synchronously and return its result.
+
+        This resolves the agent definition (built-in merged with config
+        overrides), builds its tool set, and runs it to completion.
+        """
+        agent_def = resolve_agent(agent_name, self.roles)
+        if agent_def is None:
+            from nanobot.agent.agents import get_builtin_agents
+            available = list(get_builtin_agents().keys())
+            # Also include custom roles
+            for role_name in self.roles:
+                if role_name not in available:
+                    available.append(role_name)
+            return (
+                f"Unknown agent '{agent_name}'. "
+                f"Available agents: {', '.join(available)}"
+            )
+
+        # Determine model
+        model_id = agent_def.default_model or self.model_spec.model
+        provider = self._provider_for_model(model_id)
+
+        model_spec = ModelSpec(
+            model=model_id,
+            max_tokens=self.model_spec.max_tokens,
+            temperature=agent_def.temperature,
+            max_tool_iterations=agent_def.max_iterations,
+        )
+
+        # Build tools restricted to the agent's allow list
+        tools = self._build_tools_for_agent(agent_def)
+
+        # Build the prompt
+        full_task = task
+        if context:
+            full_task = f"{task}\n\nContext:\n{context}"
+
+        system_prompt = f"{agent_def.system_prompt}\n\n## Workspace\nYour workspace is at: {self.workspace}"
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": full_task},
+        ]
+
+        # Run agent loop
+        max_iterations = agent_def.max_iterations
+        iteration = 0
+        final_result: str | None = None
+
+        logger.info(f"Delegate @{agent_name} starting (model={model_id})")
+
+        while iteration < max_iterations:
+            iteration += 1
+
+            try:
+                response = await provider.chat(
+                    messages=messages,
+                    tools=tools.get_definitions() if len(tools) > 0 else None,
+                    model=model_id,
+                    max_tokens=model_spec.max_tokens,
+                    temperature=model_spec.temperature,
+                )
+            except Exception as exc:
+                logger.error(f"Delegate @{agent_name} LLM error: {exc}")
+                return f"Agent @{agent_name} failed: {exc}"
+
+            if response.finish_reason == "error":
+                return f"Agent @{agent_name} error: {response.content}"
+
+            if response.has_tool_calls:
+                tool_call_dicts = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments),
+                        },
+                    }
+                    for tc in response.tool_calls
+                ]
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": response.content or "",
+                        "tool_calls": tool_call_dicts,
+                    }
+                )
+
+                for tool_call in response.tool_calls:
+                    logger.debug(f"Delegate @{agent_name} executing: {tool_call.name}")
+                    result = await tools.execute(tool_call.name, tool_call.arguments)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_call.name,
+                            "content": result,
+                        }
+                    )
+            else:
+                final_result = response.content
+                break
+
+        if final_result is None:
+            final_result = f"Agent @{agent_name} reached iteration limit without a final response."
+
+        logger.info(f"Delegate @{agent_name} completed ({iteration} iterations)")
+        return final_result
+
+    def _build_tools_for_agent(self, agent_def: AgentDef) -> ToolRegistry:
+        """Build a tool registry restricted to the agent's allowed tools."""
+        tools = ToolRegistry()
+        available_tools = [
+            ReadFileTool(),
+            WriteFileTool(),
+            EditFileTool(),
+            ListDirTool(),
+            ExecTool(working_dir=str(self.workspace)),
+            WebSearchTool(api_key=self.brave_api_key),
+            WebFetchTool(),
+        ]
+
+        allow = set(agent_def.tool_allow) if agent_def.tool_allow else set()
+
+        for tool in available_tools:
+            if allow and tool.name not in allow:
+                continue
+            tools.register(tool)
+
+        return tools
 
     async def _run_subagent(
         self,
