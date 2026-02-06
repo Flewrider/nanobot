@@ -207,6 +207,19 @@ def _strip_json_comments(text: str) -> str:
     return "".join(result)
 
 
+def _clean_roles(roles: dict[str, Any]) -> dict[str, Any]:
+    """Recursively strip keys with ``None`` or empty-list ``[]`` values from role dicts."""
+
+    def _clean(obj: Any) -> Any:
+        if isinstance(obj, dict):
+            return {k: _clean(v) for k, v in obj.items() if v is not None and v != []}
+        if isinstance(obj, list):
+            return [_clean(item) for item in obj]
+        return obj
+
+    return {name: _clean(role) for name, role in roles.items()}
+
+
 def render_config_with_comments(data: dict[str, Any]) -> str:
     """Render a JSON-with-comments config template."""
 
@@ -227,7 +240,7 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
     providers = data["providers"]
     gateway = data["gateway"]
     tools = data["tools"]["web"]["search"]
-    roles = data["agents"].get("roles", {})
+    roles = _clean_roles(data["agents"].get("roles", {}))
 
     return """{
   // Default agent behavior and model selection.

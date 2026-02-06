@@ -4,6 +4,7 @@ import platform
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import questionary
 from questionary import Style as QStyle
@@ -21,6 +22,14 @@ from nanobot.config.schema import (
     ModelSpec,
     ProviderConfig,
 )
+
+# Tuned defaults per agent role — applied when creating new roles in the wizard.
+_ROLE_DEFAULTS: dict[str, dict[str, Any]] = {
+    "explorer": {"max_tokens": 4096, "temperature": 0.3, "max_tool_iterations": 10},
+    "researcher": {"max_tokens": 8192, "temperature": 0.5, "max_tool_iterations": 15},
+    "coder": {"max_tokens": 16384, "temperature": 0.2, "max_tool_iterations": 30},
+    "thinker": {"max_tokens": 16384, "temperature": 0.8, "max_tool_iterations": 5},
+}
 
 # Questionary styling — matches the Rich cyan/green palette
 _STYLE = QStyle(
@@ -387,12 +396,17 @@ def _section_models(console: Console, config: Config) -> None:
     table = Table(title="Recommended Models", show_header=True)
     table.add_column("Role", style="cyan")
     table.add_column("Recommended Model", style="green")
+    table.add_column("Temp", justify="right")
+    table.add_column("Iterations", justify="right")
 
     role_order = ["orchestrator", "explorer", "researcher", "coder", "thinker"]
     for role in role_order:
         model = recommendations.get(role)
         if model:
-            table.add_row(role, model)
+            rd = _ROLE_DEFAULTS.get(role, {})
+            temp = str(rd.get("temperature", "-"))
+            iters = str(rd.get("max_tool_iterations", "-"))
+            table.add_row(role, model, temp, iters)
     console.print(table)
     console.print()
 
@@ -460,12 +474,13 @@ def _section_models(console: Console, config: Config) -> None:
         else:
             chosen_model = answer
 
+        defaults = _ROLE_DEFAULTS.get(role, {})
         if role not in config.agents.roles:
-            config.agents.roles[role] = AgentRole(model=ModelSpec(model=chosen_model))
+            config.agents.roles[role] = AgentRole(model=ModelSpec(model=chosen_model, **defaults))
         else:
             existing = config.agents.roles[role]
             if existing.model is None:
-                existing.model = ModelSpec(model=chosen_model)
+                existing.model = ModelSpec(model=chosen_model, **defaults)
             else:
                 existing.model.model = chosen_model
 
