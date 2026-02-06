@@ -131,6 +131,8 @@ class ClaudeMaxConfig(BaseModel):
 
     enabled: bool = False
     cli_path: str = "claude"  # Path to claude CLI binary
+    oauth_token: str = ""  # CLAUDE_CODE_OAUTH_TOKEN for headless use
+    effort_level: str = ""  # low, medium, or high (empty = CLI default)
 
 
 class CodexConfig(BaseModel):

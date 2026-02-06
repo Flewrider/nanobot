@@ -238,6 +238,8 @@ def gateway(
 
         claude_max_provider = ClaudeMaxProvider(
             cli_path=config.providers.claude_max.cli_path,
+            oauth_token=config.providers.claude_max.oauth_token,
+            effort_level=config.providers.claude_max.effort_level,
         )
         console.print(f"[green]\u2713[/green] Claude subscription provider enabled")
 
@@ -383,6 +385,8 @@ def agent(
 
         claude_max_provider = ClaudeMaxProvider(
             cli_path=config.providers.claude_max.cli_path,
+            oauth_token=config.providers.claude_max.oauth_token,
+            effort_level=config.providers.claude_max.effort_level,
         )
 
     codex_provider = None

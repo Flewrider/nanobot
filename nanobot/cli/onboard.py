@@ -268,38 +268,61 @@ def _section_claude_sub(console: Console, config: Config) -> None:
         if custom_path:
             cli_path = custom_path
 
-    # Offer to authenticate via setup-token
+    # Offer to authenticate via claude login (interactive browser OAuth)
+    oauth_token = ""
     auth = _ask_confirm(
-        "Authenticate now? (run 'claude setup-token' in another terminal first)",
+        "Authenticate now? (will open browser for Claude OAuth)",
         default=False,
     )
     if auth:
-        token = _ask_text("Paste your setup token")
-        if token:
-            token = token.strip()
-            try:
-                result = subprocess.run(
-                    [cli_path, "setup-token", token],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if result.returncode == 0:
-                    console.print("[green]Authentication successful![/green]")
-                else:
-                    console.print(
-                        f"[yellow]setup-token returned exit {result.returncode}[/yellow]"
-                    )
-                    if result.stderr:
-                        console.print(f"[dim]{result.stderr[:300]}[/dim]")
-            except FileNotFoundError:
+        console.print("[dim]Running 'claude login'...[/dim]")
+        try:
+            result = subprocess.run(
+                [cli_path, "login"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode == 0:
+                console.print("[green]Authentication successful![/green]")
+            else:
                 console.print(
-                    f"[red]Could not run '{cli_path}'. Make sure it's installed.[/red]"
+                    f"[yellow]claude login returned exit {result.returncode}[/yellow]"
                 )
-            except Exception as exc:
-                console.print(f"[red]Error: {exc}[/red]")
+                if result.stderr:
+                    console.print(f"[dim]{result.stderr[:300]}[/dim]")
+        except FileNotFoundError:
+            console.print(
+                f"[red]Could not run '{cli_path}'. Make sure it's installed.[/red]"
+            )
+        except Exception as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+    else:
+        # Offer headless token for environments without a browser
+        use_token = _ask_confirm(
+            "Set CLAUDE_CODE_OAUTH_TOKEN for headless use? "
+            "(run 'claude setup-token' in another terminal first)",
+            default=False,
+        )
+        if use_token:
+            token = _ask_text("Paste your OAuth token")
+            if token and token.strip():
+                oauth_token = token.strip()
 
-    config.providers.claude_max = ClaudeMaxConfig(enabled=True, cli_path=cli_path)
+    # Reasoning effort level
+    effort = _ask_text(
+        "Effort level (low/medium/high, blank for default)",
+        default=config.providers.claude_max.effort_level or "",
+    )
+    effort_level = effort.strip().lower() if effort else ""
+    if effort_level and effort_level not in ("low", "medium", "high"):
+        console.print(f"[yellow]Unknown effort '{effort_level}', skipping.[/yellow]")
+        effort_level = ""
+
+    config.providers.claude_max = ClaudeMaxConfig(
+        enabled=True, cli_path=cli_path, oauth_token=oauth_token,
+        effort_level=effort_level,
+    )
     console.print("[green]Claude subscription enabled.[/green]\n")
 
 

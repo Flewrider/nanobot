@@ -24,12 +24,14 @@ class ClaudeMaxProvider(LLMProvider):
             Windows:     irm https://claude.ai/install.ps1 | iex
 
         Then authenticate:
-            claude setup-token
+            claude login
     """
 
-    def __init__(self, cli_path: str = "claude"):
+    def __init__(self, cli_path: str = "claude", oauth_token: str = "", effort_level: str = ""):
         super().__init__()
         self.cli_path = cli_path
+        self.oauth_token = oauth_token
+        self.effort_level = effort_level
 
     async def chat(
         self,
@@ -62,6 +64,12 @@ class ClaudeMaxProvider(LLMProvider):
         env = os.environ.copy()
         for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"):
             env.pop(key, None)
+        # Inject OAuth token if configured (for headless use)
+        if self.oauth_token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = self.oauth_token
+        # Inject reasoning effort level if configured
+        if self.effort_level:
+            env["CLAUDE_CODE_EFFORT_LEVEL"] = self.effort_level
 
         try:
             process = await asyncio.create_subprocess_exec(

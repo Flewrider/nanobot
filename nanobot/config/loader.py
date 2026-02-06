@@ -340,7 +340,11 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
       // Enable Claude CLI provider (Claude subscription, no API key needed).
       "enabled": %s,
       // Path to the claude CLI binary.
-      "cliPath": %s
+      "cliPath": %s,
+      // OAuth token for headless use (CLAUDE_CODE_OAUTH_TOKEN).
+      "oauthToken": %s,
+      // Reasoning effort level: "low", "medium", or "high" (default: high).
+      "effortLevel": %s
     },
     "codex": {
       // Enable Codex CLI provider (ChatGPT/Codex subscription, no API key needed).
@@ -402,6 +406,8 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
         _json(providers["gemini"]["apiBase"]),
         _json(providers.get("claudeMax", {}).get("enabled", False)),
         _json(providers.get("claudeMax", {}).get("cliPath", "claude")),
+        _json(providers.get("claudeMax", {}).get("oauthToken", "")),
+        _json(providers.get("claudeMax", {}).get("effortLevel", "")),
         _json(providers.get("codex", {}).get("enabled", False)),
         _json(providers.get("codex", {}).get("cliPath", "codex")),
         _json(gateway["host"]),
