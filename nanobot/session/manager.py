@@ -31,11 +31,12 @@ class Session:
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
-    def mark_processing(self, content: str) -> None:
+    def mark_processing(self, content: str, tool_context: str = "") -> None:
         """Mark that we're processing a user message (for crash recovery)."""
         self.metadata["processing"] = {
             "started_at": datetime.now().isoformat(),
             "content": content[:200],  # Store truncated content for context
+            "last_tools": tool_context[:500],  # Recent tool activity for better recovery
         }
 
     def clear_processing(self) -> None:
@@ -222,12 +223,12 @@ class SessionManager:
 
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
 
-    def get_interrupted_sessions(self) -> list[tuple[str, str]]:
+    def get_interrupted_sessions(self) -> list[tuple[str, str, str]]:
         """
         Find sessions that were interrupted mid-processing (e.g., due to OOM/crash).
 
         Returns:
-            List of (session_key, interrupted_content) tuples.
+            List of (session_key, interrupted_content, last_tools) tuples.
         """
         interrupted = []
 
@@ -242,7 +243,8 @@ class SessionManager:
                             if processing:
                                 key = path.stem.replace("_", ":", 1)  # telegram_123 -> telegram:123
                                 content = processing.get("content", "continue")
-                                interrupted.append((key, content))
+                                last_tools = processing.get("last_tools", "")
+                                interrupted.append((key, content, last_tools))
             except Exception:
                 continue
 

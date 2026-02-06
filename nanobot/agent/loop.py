@@ -162,7 +162,7 @@ class AgentLoop:
 
         logger.info(f"Found {len(interrupted)} interrupted session(s), attempting recovery...")
 
-        for session_key, content in interrupted:
+        for session_key, content, last_tools in interrupted:
             try:
                 # Parse channel and chat_id from session key
                 if ":" in session_key:
@@ -170,11 +170,14 @@ class AgentLoop:
                 else:
                     continue
 
-                # Create a recovery message
+                # Create a recovery message with tool context
                 recovery_content = (
                     f"[System: Your previous task was interrupted (possibly due to a crash or memory issue). "
-                    f"The task was: '{content}...' Please continue where you left off or report what went wrong.]"
+                    f"The task was: '{content}...' "
                 )
+                if last_tools:
+                    recovery_content += f"Last tools executed before crash: {last_tools}. "
+                recovery_content += "Please continue where you left off or report what went wrong.]"
 
                 # Create an inbound message to process
                 recovery_msg = InboundMessage(
@@ -255,6 +258,7 @@ class AgentLoop:
         # Agent loop
         iteration = 0
         final_content = None
+        recent_tools = []  # Track recent tool calls for crash recovery
 
         auto_continue_limit = 5
         auto_continues = 0
@@ -309,6 +313,17 @@ class AgentLoop:
                 for tool_call in response.tool_calls:
                     args_str = json.dumps(tool_call.arguments)
                     logger.debug(f"Executing tool: {tool_call.name} with arguments: {args_str}")
+
+                    # Track recent tools for crash recovery
+                    recent_tools.append(f"{tool_call.name}: {args_str[:100]}")
+                    if len(recent_tools) > 5:
+                        recent_tools.pop(0)
+
+                    # Update processing marker with recent tool context
+                    if msg.channel not in {"system", "heartbeat"}:
+                        session.mark_processing(msg.content, " | ".join(recent_tools))
+                        self.sessions.save(session)
+
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
 
                     # Check if this is a media injection request
