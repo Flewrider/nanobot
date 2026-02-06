@@ -291,8 +291,6 @@ def _section_claude_sub(console: Console, config: Config) -> None:
         try:
             result = subprocess.run(
                 [cli_path, "login"],
-                capture_output=True,
-                text=True,
                 timeout=120,
             )
             if result.returncode == 0:
@@ -301,8 +299,6 @@ def _section_claude_sub(console: Console, config: Config) -> None:
                 console.print(
                     f"[yellow]claude login returned exit {result.returncode}[/yellow]"
                 )
-                if result.stderr:
-                    console.print(f"[dim]{result.stderr[:300]}[/dim]")
         except FileNotFoundError:
             console.print(
                 f"[red]Could not run '{cli_path}'. Make sure it's installed.[/red]"
@@ -384,8 +380,6 @@ def _section_codex_sub(console: Console, config: Config) -> None:
         try:
             result = subprocess.run(
                 [cli_path, "login"],
-                capture_output=True,
-                text=True,
                 timeout=120,
             )
             if result.returncode == 0:
@@ -394,8 +388,6 @@ def _section_codex_sub(console: Console, config: Config) -> None:
                 console.print(
                     f"[yellow]codex login returned exit {result.returncode}[/yellow]"
                 )
-                if result.stderr:
-                    console.print(f"[dim]{result.stderr[:300]}[/dim]")
         except FileNotFoundError:
             console.print(
                 f"[red]Could not run '{cli_path}'. Make sure it's installed.[/red]"
