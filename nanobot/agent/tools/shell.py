@@ -10,6 +10,7 @@ from nanobot.agent.tools.base import Tool
 SENSITIVE_ENV_VARS = [
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
+    "CODEX_API_KEY",
     "GEMINI_API_KEY",
     "OPENROUTER_API_KEY",
     "GROQ_API_KEY",

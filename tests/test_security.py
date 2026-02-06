@@ -22,6 +22,7 @@ class TestEnvSanitization:
         with patch.dict(os.environ, {
             "ANTHROPIC_API_KEY": "sk-ant-secret",
             "OPENAI_API_KEY": "sk-secret",
+            "CODEX_API_KEY": "codex-secret",
             "GEMINI_API_KEY": "AIza-secret",
             "OPENROUTER_API_KEY": "sk-or-secret",
             "GROQ_API_KEY": "gsk_secret",
@@ -70,6 +71,9 @@ class TestPathDenial:
 
     def test_claude_dir_denied(self):
         assert _is_path_denied("~/.claude/credentials") is True
+
+    def test_codex_dir_denied(self):
+        assert _is_path_denied("~/.codex/auth.json") is True
 
     def test_dot_env_denied(self):
         assert _is_path_denied(".env") is True

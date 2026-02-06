@@ -213,6 +213,14 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
     def _json(value: Any) -> str:
         return json.dumps(value, ensure_ascii=True)
 
+    def _json_indented(value: Any, indent_level: int = 2) -> str:
+        """Pretty-print JSON with each line indented to *indent_level* spaces."""
+        raw = json.dumps(value, ensure_ascii=True, indent=2)
+        prefix = " " * indent_level
+        lines = raw.splitlines()
+        # First line sits at the insertion point; subsequent lines need the prefix.
+        return lines[0] + "\n".join([""] + [prefix + line for line in lines[1:]]) if len(lines) > 1 else raw
+
     agents = data["agents"]["defaults"]
     model_spec = agents["model"]
     channels = data["channels"]
@@ -241,7 +249,7 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
         "fallbacks": %s
       }
     },
-    // Optional role overrides for subagents.
+    // Optional role overrides for subagents (explorer, researcher, coder, thinker).
     "roles": %s
   },
 
@@ -314,6 +322,18 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
       "apiKey": %s,
       // Optional API base URL.
       "apiBase": %s
+    },
+    "claudeMax": {
+      // Enable Claude CLI provider (Claude subscription, no API key needed).
+      "enabled": %s,
+      // Path to the claude CLI binary.
+      "cliPath": %s
+    },
+    "codex": {
+      // Enable Codex CLI provider (ChatGPT/Codex subscription, no API key needed).
+      "enabled": %s,
+      // Path to the codex CLI binary.
+      "cliPath": %s
     }
   },
 
@@ -344,7 +364,7 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
         _json(model_spec["temperature"]),
         _json(model_spec["maxToolIterations"]),
         _json(model_spec.get("fallbacks", [])),
-        _json(roles),
+        _json_indented(roles, 4),
         _json(channels["whatsapp"]["enabled"]),
         _json(channels["whatsapp"]["bridgeUrl"]),
         _json(channels["whatsapp"]["allowFrom"]),
@@ -367,6 +387,10 @@ def render_config_with_comments(data: dict[str, Any]) -> str:
         _json(providers["vllm"]["apiBase"]),
         _json(providers["gemini"]["apiKey"]),
         _json(providers["gemini"]["apiBase"]),
+        _json(providers.get("claudeMax", {}).get("enabled", False)),
+        _json(providers.get("claudeMax", {}).get("cliPath", "claude")),
+        _json(providers.get("codex", {}).get("enabled", False)),
+        _json(providers.get("codex", {}).get("cliPath", "codex")),
         _json(gateway["host"]),
         _json(gateway["port"]),
         _json(tools["apiKey"]),

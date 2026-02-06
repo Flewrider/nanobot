@@ -43,38 +43,18 @@ def main(
 
 @app.command()
 def onboard():
-    """Initialize nanobot configuration and workspace."""
-    from nanobot.config.loader import get_config_path, save_config
-    from nanobot.config.schema import Config
+    """Initialize nanobot configuration and workspace with an interactive wizard."""
+    from nanobot.cli.onboard import run_wizard
+    from nanobot.config.loader import get_config_path, load_config
     from nanobot.utils.helpers import get_workspace_path
 
     config_path = get_config_path()
 
-    if config_path.exists():
-        console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
-        if not typer.confirm("Overwrite?"):
-            raise typer.Exit()
-
-    # Create default config
-    config = Config()
-    save_config(config)
-    console.print(f"[green]✓[/green] Created config at {config_path}")
-
-    # Create workspace
+    # Load existing config (or defaults if none exists)
+    config = load_config(config_path)
     workspace = get_workspace_path()
-    console.print(f"[green]✓[/green] Created workspace at {workspace}")
 
-    # Create default bootstrap files
-    _create_workspace_templates(workspace)
-
-    console.print(f"\n{__logo__} nanobot is ready!")
-    console.print("\nNext steps:")
-    console.print("  1. Add your API key to [cyan]~/.nanobot/config.json[/cyan]")
-    console.print("     Get one at: https://openrouter.ai/keys")
-    console.print('  2. Chat: [cyan]nanobot agent -m "Hello!"[/cyan]')
-    console.print(
-        "\n[dim]Want Telegram/WhatsApp? See: https://github.com/HKUDS/nanobot#-chat-apps[/dim]"
-    )
+    run_wizard(console, config, config_path, workspace)
 
 
 def _create_workspace_templates(workspace: Path):
@@ -218,10 +198,11 @@ def gateway(
     api_key = config.get_api_key()
     api_base = config.get_api_base()
 
-    if not api_key and not config.providers.claude_max.enabled:
+    has_cli_provider = config.providers.claude_max.enabled or config.providers.codex.enabled
+    if not api_key and not has_cli_provider:
         console.print("[red]Error: No API key configured.[/red]")
         console.print("Set one in ~/.nanobot/config.json under providers.openrouter.apiKey")
-        console.print("Or enable Claude Max: providers.claudeMax.enabled = true")
+        console.print("Or enable a CLI subscription: providers.claudeMax.enabled = true")
         raise typer.Exit(1)
 
     provider_keys = {
@@ -250,7 +231,7 @@ def gateway(
         provider_bases=provider_bases,
     )
 
-    # Create Claude Max provider if enabled
+    # Create Claude subscription provider if enabled
     claude_max_provider = None
     if config.providers.claude_max.enabled:
         from nanobot.providers.claude_max import ClaudeMaxProvider
@@ -258,7 +239,17 @@ def gateway(
         claude_max_provider = ClaudeMaxProvider(
             cli_path=config.providers.claude_max.cli_path,
         )
-        console.print(f"[green]\u2713[/green] Claude Max provider enabled")
+        console.print(f"[green]\u2713[/green] Claude subscription provider enabled")
+
+    # Create Codex subscription provider if enabled
+    codex_provider = None
+    if config.providers.codex.enabled:
+        from nanobot.providers.codex import CodexProvider
+
+        codex_provider = CodexProvider(
+            cli_path=config.providers.codex.cli_path,
+        )
+        console.print(f"[green]\u2713[/green] Codex subscription provider enabled")
 
     # Create agent
     agent = AgentLoop(
@@ -270,6 +261,7 @@ def gateway(
         roles=config.agents.roles,
         brave_api_key=config.tools.web.search.api_key or None,
         claude_max_provider=claude_max_provider,
+        codex_provider=codex_provider,
     )
 
     # Create cron service
@@ -353,7 +345,8 @@ def agent(
     api_key = config.get_api_key()
     api_base = config.get_api_base()
 
-    if not api_key and not config.providers.claude_max.enabled:
+    has_cli_provider = config.providers.claude_max.enabled or config.providers.codex.enabled
+    if not api_key and not has_cli_provider:
         console.print("[red]Error: No API key configured.[/red]")
         raise typer.Exit(1)
 
@@ -384,13 +377,20 @@ def agent(
         provider_bases=provider_bases,
     )
 
-    # Create Claude Max provider if enabled
     claude_max_provider = None
     if config.providers.claude_max.enabled:
         from nanobot.providers.claude_max import ClaudeMaxProvider
 
         claude_max_provider = ClaudeMaxProvider(
             cli_path=config.providers.claude_max.cli_path,
+        )
+
+    codex_provider = None
+    if config.providers.codex.enabled:
+        from nanobot.providers.codex import CodexProvider
+
+        codex_provider = CodexProvider(
+            cli_path=config.providers.codex.cli_path,
         )
 
     agent_loop = AgentLoop(
@@ -401,6 +401,7 @@ def agent(
         roles=config.agents.roles,
         brave_api_key=config.tools.web.search.api_key or None,
         claude_max_provider=claude_max_provider,
+        codex_provider=codex_provider,
     )
 
     if message:
@@ -755,9 +756,14 @@ def status():
         )
         console.print(f"vLLM/Local: {vllm_status}")
 
-        has_claude_max = config.providers.claude_max.enabled
+        has_claude_sub = config.providers.claude_max.enabled
         console.print(
-            f"Claude Max: {'[green]\u2713[/green]' if has_claude_max else '[dim]not enabled[/dim]'}"
+            f"Claude sub: {'[green]\u2713[/green]' if has_claude_sub else '[dim]not enabled[/dim]'}"
+        )
+
+        has_codex = config.providers.codex.enabled
+        console.print(
+            f"Codex sub:  {'[green]\u2713[/green]' if has_codex else '[dim]not enabled[/dim]'}"
         )
 
 

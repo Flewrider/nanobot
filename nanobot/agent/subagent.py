@@ -40,9 +40,11 @@ class SubagentManager:
         roles: dict[str, AgentRole] | None = None,
         brave_api_key: str | None = None,
         claude_max_provider: LLMProvider | None = None,
+        codex_provider: LLMProvider | None = None,
     ):
         self.provider = provider
         self.claude_max_provider = claude_max_provider
+        self.codex_provider = codex_provider
         self.workspace = workspace
         self.bus = bus
         self.model_spec = model or ModelSpec(model=provider.get_default_model())
@@ -97,6 +99,8 @@ class SubagentManager:
         """Return the correct provider based on model prefix."""
         if model.startswith("claude_max/") and self.claude_max_provider:
             return self.claude_max_provider
+        if model.startswith("codex/") and self.codex_provider:
+            return self.codex_provider
         return self.provider
 
     async def delegate(

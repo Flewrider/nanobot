@@ -54,10 +54,12 @@ class AgentLoop:
         roles: dict[str, AgentRole] | None = None,
         brave_api_key: str | None = None,
         claude_max_provider: LLMProvider | None = None,
+        codex_provider: LLMProvider | None = None,
     ):
         self.bus = bus
         self.provider = provider
         self.claude_max_provider = claude_max_provider
+        self.codex_provider = codex_provider
         self.workspace = workspace
         self.model_spec = model or ModelSpec(model=provider.get_default_model())
         self.max_iterations = max_iterations or self.model_spec.max_tool_iterations
@@ -79,6 +81,7 @@ class AgentLoop:
             roles=self.subagent_roles,
             brave_api_key=brave_api_key,
             claude_max_provider=claude_max_provider,
+            codex_provider=codex_provider,
         )
 
         self._running = False
@@ -742,10 +745,12 @@ class AgentLoop:
         candidates = self._model_candidates()
 
         for i, spec in enumerate(candidates):
-            # Route claude_max/ models to the ClaudeMaxProvider
+            # Route CLI-subscription models to their providers
             provider = self.provider
             if spec.model.startswith("claude_max/") and self.claude_max_provider:
                 provider = self.claude_max_provider
+            elif spec.model.startswith("codex/") and self.codex_provider:
+                provider = self.codex_provider
 
             # Check if model supports media - if not, strip media from messages
             if model_supports_media(spec.model):

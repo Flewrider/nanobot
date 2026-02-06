@@ -19,8 +19,12 @@ class ClaudeMaxProvider(LLMProvider):
     No API key needed — authentication is handled by the CLI's own OAuth token.
 
     Prerequisites:
-        npm install -g @anthropic-ai/claude-code
-        claude setup-token
+        Install the Claude CLI:
+            Linux/macOS: curl -fsSL https://claude.ai/install.sh | bash
+            Windows:     irm https://claude.ai/install.ps1 | iex
+
+        Then authenticate:
+            claude setup-token
     """
 
     def __init__(self, cli_path: str = "claude"):
@@ -56,9 +60,8 @@ class ClaudeMaxProvider(LLMProvider):
 
         # Build a clean environment: inherit current env but strip sensitive keys
         env = os.environ.copy()
-        for key in list(env.keys()):
-            if key == "ANTHROPIC_API_KEY":
-                del env[key]
+        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"):
+            env.pop(key, None)
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -95,7 +98,7 @@ class ClaudeMaxProvider(LLMProvider):
             return LLMResponse(
                 content=(
                     "Error: Claude CLI not found. Install with: "
-                    "npm install -g @anthropic-ai/claude-code"
+                    "curl -fsSL https://claude.ai/install.sh | bash"
                 ),
                 finish_reason="error",
             )

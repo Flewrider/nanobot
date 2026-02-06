@@ -10,6 +10,7 @@ DENIED_PATHS = [
     "~/.nanobot/config.json",
     "~/.openclaw/",
     "~/.claude/",
+    "~/.codex/",
     ".env",
     "/etc/environment",
     "/etc/shadow",

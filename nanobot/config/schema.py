@@ -127,10 +127,17 @@ class ProviderConfig(BaseModel):
 
 
 class ClaudeMaxConfig(BaseModel):
-    """Claude Max CLI provider configuration."""
+    """Claude CLI provider configuration (Claude subscription)."""
 
     enabled: bool = False
     cli_path: str = "claude"  # Path to claude CLI binary
+
+
+class CodexConfig(BaseModel):
+    """Codex CLI provider configuration (ChatGPT/Codex subscription)."""
+
+    enabled: bool = False
+    cli_path: str = "codex"  # Path to codex CLI binary
 
 
 class ProvidersConfig(BaseModel):
@@ -145,6 +152,7 @@ class ProvidersConfig(BaseModel):
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
     gemini: ProviderConfig = Field(default_factory=ProviderConfig)
     claude_max: ClaudeMaxConfig = Field(default_factory=ClaudeMaxConfig)
+    codex: CodexConfig = Field(default_factory=CodexConfig)
 
 
 class GatewayConfig(BaseModel):
