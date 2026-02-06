@@ -722,7 +722,10 @@ class AgentLoop:
                 next_model = (
                     candidates[i + 1].model if i + 1 < len(candidates) else "none (last model)"
                 )
-                logger.warning(f"Model {spec.model} failed, falling back to {next_model}")
+                error_msg = last_error.content[:200] if last_error.content else "unknown error"
+                logger.warning(
+                    f"Model {spec.model} failed, falling back to {next_model} | {error_msg}"
+                )
 
         return last_error or LLMResponse(
             content="Error calling LLM: all fallback models failed",
