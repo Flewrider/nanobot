@@ -159,7 +159,23 @@ class AgentLoop:
         Check for sessions that were interrupted mid-processing (e.g., OOM/crash).
 
         Sends a recovery message to continue the interrupted task.
+
+        To disable auto-recovery, create a file: ~/.nanobot/no_auto_continue
+        Or run: touch ~/.nanobot/no_auto_continue
+        Delete it to re-enable: rm ~/.nanobot/no_auto_continue
         """
+        # Check for disable flag
+        no_continue_flag = Path.home() / ".nanobot" / "no_auto_continue"
+        if no_continue_flag.exists():
+            logger.info("Auto-continue disabled (found ~/.nanobot/no_auto_continue)")
+            # Clear all interrupted sessions without continuing
+            for session_key, _, _ in self.sessions.get_interrupted_sessions():
+                session = self.sessions.get_or_create(session_key)
+                session.clear_processing()
+                self.sessions.save(session)
+                logger.info(f"Cleared interrupted flag for {session_key}")
+            return
+
         interrupted = self.sessions.get_interrupted_sessions()
 
         if not interrupted:
