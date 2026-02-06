@@ -71,14 +71,10 @@ class ContextPruner:
                 pruned.append(msg)
                 continue
 
-            # Recent results are kept verbatim (but still truncated if huge)
+            # Recent results are always kept fully verbatim - the agent
+            # needs full tool output for at least the next few turns.
             if tool_call_id in recent_ids:
-                if len(content) > self.LARGE_OUTPUT_THRESHOLD:
-                    truncated = self._truncate(content)
-                    chars_saved += len(content) - len(truncated)
-                    pruned.append({**msg, "content": truncated})
-                else:
-                    pruned.append(msg)
+                pruned.append(msg)
                 continue
 
             # Check staleness
@@ -90,7 +86,8 @@ class ContextPruner:
                 chars_saved += len(content) - len(summary)
                 messages_pruned += 1
                 pruned.append({**msg, "content": summary})
-            elif len(content) > self.LARGE_OUTPUT_THRESHOLD:
+            elif turn_age >= 1 and len(content) > self.LARGE_OUTPUT_THRESHOLD:
+                # Only truncate large outputs after at least 1 turn has passed
                 truncated = self._truncate(content)
                 chars_saved += len(content) - len(truncated)
                 pruned.append({**msg, "content": truncated})
