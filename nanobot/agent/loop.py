@@ -599,8 +599,9 @@ class AgentLoop:
         import asyncio
 
         last_error: LLMResponse | None = None
+        candidates = self._model_candidates()
 
-        for spec in self._model_candidates():
+        for i, spec in enumerate(candidates):
             # Retry loop for transient errors on this model
             for attempt in range(max_retries):
                 try:
@@ -614,6 +615,7 @@ class AgentLoop:
                 except Exception as exc:
                     error_str = str(exc).lower()
                     # Check if transient error (503, 429, 500, timeout, etc.)
+                    # Note: 404 is usually permanent (model not found) so we fallback immediately
                     is_transient = any(
                         code in error_str
                         for code in [
@@ -629,6 +631,16 @@ class AgentLoop:
                             "internal server error",
                         ]
                     )
+
+                    # 404 means model not found - fallback immediately without retry
+                    is_not_found = "404" in error_str or "not found" in error_str
+                    if is_not_found:
+                        logger.warning(f"Model {spec.model} not found (404), will fallback")
+                        last_error = LLMResponse(
+                            content=f"Error calling LLM: {exc}",
+                            finish_reason="error",
+                        )
+                        break  # Move to next model immediately
 
                     if is_transient and attempt < max_retries - 1:
                         delay = retry_delay * (attempt + 1)  # Exponential backoff
@@ -707,7 +719,10 @@ class AgentLoop:
 
             # If we broke out of retry loop, try next model
             if last_error:
-                logger.info(f"Falling back from {spec.model} to next model")
+                next_model = (
+                    candidates[i + 1].model if i + 1 < len(candidates) else "none (last model)"
+                )
+                logger.warning(f"Model {spec.model} failed, falling back to {next_model}")
 
         return last_error or LLMResponse(
             content="Error calling LLM: all fallback models failed",
