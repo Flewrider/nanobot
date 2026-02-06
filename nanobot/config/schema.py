@@ -49,6 +49,7 @@ class ModelSpecBase(BaseModel):
     max_tokens: int = 8192
     temperature: float = 0.7
     max_tool_iterations: int = 20
+    context_window: int | None = None
 
 
 class ModelSpec(ModelSpecBase):
@@ -71,6 +72,8 @@ class ModelSpec(ModelSpecBase):
                         converted["max_tokens"] = converted.pop("maxTokens")
                     if "maxToolIterations" in converted:
                         converted["max_tool_iterations"] = converted.pop("maxToolIterations")
+                    if "contextWindow" in converted:
+                        converted["context_window"] = converted.pop("contextWindow")
                     updated.append(converted)
                 else:
                     updated.append(item)

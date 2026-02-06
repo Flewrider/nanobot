@@ -5,10 +5,16 @@ from datetime import datetime
 from typing import Any
 
 
+# Message type constants
+MSG_USER = "user"
+MSG_SYSTEM_HEARTBEAT = "system_heartbeat"
+MSG_SYSTEM_CRON = "system_cron"
+
+
 @dataclass
 class InboundMessage:
     """Message received from a chat channel."""
-    
+
     channel: str  # telegram, discord, slack, whatsapp
     sender_id: str  # User identifier
     chat_id: str  # Chat/channel identifier
@@ -16,7 +22,8 @@ class InboundMessage:
     timestamp: datetime = field(default_factory=datetime.now)
     media: list[str] = field(default_factory=list)  # Media URLs
     metadata: dict[str, Any] = field(default_factory=dict)  # Channel-specific data
-    
+    message_type: str = MSG_USER  # "user", "system_heartbeat", "system_cron"
+
     @property
     def session_key(self) -> str:
         """Unique key for session identification."""

@@ -7,11 +7,14 @@ from typing import Any
 
 from loguru import logger
 
-from nanobot.bus.events import InboundMessage, OutboundMessage
+from nanobot.bus.events import InboundMessage, OutboundMessage, MSG_SYSTEM_HEARTBEAT
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider, LLMResponse
 from nanobot.config.schema import ModelSpec, ModelSpecBase, AgentRole
+from nanobot.agent.compactor import Compactor
 from nanobot.agent.context import ContextBuilder
+from nanobot.agent.pruner import ContextPruner
+from nanobot.agent.tokens import TokenCounter
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from nanobot.agent.tools.shell import ExecTool
@@ -60,6 +63,9 @@ class AgentLoop:
         self.context = ContextBuilder(workspace)
         self.sessions = SessionManager(workspace)
         self.tools = ToolRegistry()
+        self.token_counter = TokenCounter()
+        self.compactor = Compactor(provider=provider, token_counter=self.token_counter)
+        self.pruner = ContextPruner()
         self.subagent_roles = roles or {}
         self._last_user_context: tuple[str, str] | None = None
         self.subagents = SubagentManager(
@@ -154,6 +160,21 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
+    def get_context_usage(self, messages: list[dict[str, Any]], model: str | None = None) -> tuple[int, int]:
+        """Get current token usage vs context window limit.
+
+        Args:
+            messages: Current message array.
+            model: Model identifier. Defaults to the configured model.
+
+        Returns:
+            Tuple of (tokens_used, context_limit).
+        """
+        model = model or self.model_spec.model
+        return self.token_counter.get_context_usage(
+            messages, model, context_window=self.model_spec.context_window
+        )
+
     async def _recover_interrupted_sessions(self) -> None:
         """
         Check for sessions that were interrupted mid-processing (e.g., OOM/crash).
@@ -237,35 +258,42 @@ class AgentLoop:
         if msg.channel == "system":
             return await self._process_system_message(msg)
 
+        is_heartbeat = msg.message_type == MSG_SYSTEM_HEARTBEAT
+
         logger.info(f"Processing message from {msg.channel}:{msg.sender_id}")
 
         # Get or create session
         session_key = msg.session_key
-        if msg.channel == "heartbeat" and self._last_user_context:
+        if is_heartbeat and self._last_user_context:
             last_channel, last_chat_id = self._last_user_context
             session_key = f"{last_channel}:{last_chat_id}"
         session = self.sessions.get_or_create(session_key)
 
+        # Skip heartbeat if session is currently processing a user message
+        if is_heartbeat and session.is_processing:
+            logger.info("Heartbeat: skipping, session is currently processing")
+            return None
+
         # Update tool contexts
         message_tool = self.tools.get("message")
         if isinstance(message_tool, MessageTool):
-            if msg.channel == "heartbeat" and self._last_user_context:
+            if is_heartbeat and self._last_user_context:
                 message_tool.set_context(*self._last_user_context)
             else:
                 message_tool.set_context(msg.channel, msg.chat_id)
 
         spawn_tool = self.tools.get("spawn")
         if isinstance(spawn_tool, SpawnTool):
-            if msg.channel == "heartbeat" and self._last_user_context:
+            if is_heartbeat and self._last_user_context:
                 spawn_tool.set_context(*self._last_user_context)
             else:
                 spawn_tool.set_context(msg.channel, msg.chat_id)
 
-        if msg.channel not in {"system", "heartbeat"}:
+        if not is_heartbeat and msg.channel != "system":
             self._last_user_context = (msg.channel, msg.chat_id)
 
         # Mark that we're processing this message (for crash recovery)
-        if msg.channel not in {"system", "heartbeat"}:
+        if not is_heartbeat and msg.channel != "system":
             session.mark_processing(msg.content)
             self.sessions.save(session)
 
@@ -305,9 +333,27 @@ class AgentLoop:
                     }
                 )
 
+            # Compact context if approaching token limits
+            if await self.compactor.should_compact(messages, self.model_spec.model):
+                memory_mgr = getattr(self.context, "memory", None)
+                messages, comp_meta = await self.compactor.compact(
+                    messages, self.model_spec.model, memory_manager=memory_mgr
+                )
+                session.compaction_count += 1
+                self.sessions.save(session)
+                logger.info(
+                    f"Context compacted: {comp_meta['tokens_before']} -> "
+                    f"{comp_meta['tokens_after']} tokens, "
+                    f"{comp_meta['turns_removed']} turns removed"
+                )
+
+            # Prune stale tool outputs before calling LLM
+            current_turn = sum(1 for m in messages if m.get("role") == "user")
+            pruned_messages = self.pruner.prune(messages, current_turn)
+
             # Call LLM (no tools on final iteration to force a text response)
             response = await self._chat_with_fallback(
-                messages=messages,
+                messages=pruned_messages,
                 tools=None if at_limit else self.tools.get_definitions(),
             )
 
@@ -341,7 +387,7 @@ class AgentLoop:
                         recent_tools.pop(0)
 
                     # Update processing marker with recent tool context
-                    if msg.channel not in {"system", "heartbeat"}:
+                    if not is_heartbeat and msg.channel != "system":
                         session.mark_processing(msg.content, " | ".join(recent_tools))
                         self.sessions.save(session)
 
@@ -431,11 +477,15 @@ class AgentLoop:
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
 
-        # Save to session and clear processing flag (task completed)
-        session.add_message("user", msg.content)
-        session.add_message("assistant", final_content)
-        session.clear_processing()
-        self.sessions.save(session)
+        # Heartbeat messages are ephemeral - don't save to session history
+        if is_heartbeat:
+            logger.info("Heartbeat: processed (ephemeral, not saved to history)")
+        else:
+            # Save to session and clear processing flag (task completed)
+            session.add_message("user", msg.content)
+            session.add_message("assistant", final_content)
+            session.clear_processing()
+            self.sessions.save(session)
 
         return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=final_content)
 
@@ -483,8 +533,21 @@ class AgentLoop:
         while iteration < self.max_iterations:
             iteration += 1
 
+            # Compact context if approaching token limits
+            if await self.compactor.should_compact(messages, self.model_spec.model):
+                memory_mgr = getattr(self.context, "memory", None)
+                messages, comp_meta = await self.compactor.compact(
+                    messages, self.model_spec.model, memory_manager=memory_mgr
+                )
+                session.compaction_count += 1
+                self.sessions.save(session)
+
+            # Prune stale tool outputs before calling LLM
+            current_turn = sum(1 for m in messages if m.get("role") == "user")
+            pruned_messages = self.pruner.prune(messages, current_turn)
+
             response = await self._chat_with_fallback(
-                messages=messages,
+                messages=pruned_messages,
                 tools=self.tools.get_definitions(),
             )
 
@@ -537,16 +600,6 @@ class AgentLoop:
         """
         msg = InboundMessage(channel="cli", sender_id="user", chat_id="direct", content=content)
 
-        response = await self._process_message(msg)
-        return response.content if response else ""
-
-    async def process_heartbeat(self, content: str) -> str:
-        msg = InboundMessage(
-            channel="heartbeat",
-            sender_id="heartbeat",
-            chat_id="heartbeat",
-            content=content,
-        )
         response = await self._process_message(msg)
         return response.content if response else ""
 
@@ -775,7 +828,14 @@ class AgentLoop:
                     last_error = response
                     break  # Move to next model
 
-                # Success!
+                # Success - log token usage from response
+                if response.usage:
+                    logger.debug(
+                        f"Token usage [{spec.model}]: "
+                        f"prompt={response.usage.get('prompt_tokens', 0)}, "
+                        f"completion={response.usage.get('completion_tokens', 0)}, "
+                        f"total={response.usage.get('total_tokens', 0)}"
+                    )
                 return response
 
             # If we broke out of retry loop, try next model

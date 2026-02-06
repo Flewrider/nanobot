@@ -1,10 +1,17 @@
 """Heartbeat service - periodic agent wake-up to check for tasks."""
 
+from __future__ import annotations
+
 import asyncio
 from pathlib import Path
-from typing import Any, Callable, Coroutine
+from typing import TYPE_CHECKING
 
 from loguru import logger
+
+from nanobot.bus.events import InboundMessage, MSG_SYSTEM_HEARTBEAT
+
+if TYPE_CHECKING:
+    from nanobot.bus.queue import MessageBus
 
 # Default interval: 30 minutes
 DEFAULT_HEARTBEAT_INTERVAL_S = 30 * 60
@@ -42,19 +49,19 @@ class HeartbeatService:
     """
     Periodic heartbeat service that wakes the agent to check for tasks.
 
-    The agent reads HEARTBEAT.md from the workspace and executes any
-    tasks listed there. If nothing needs attention, it replies HEARTBEAT_OK.
+    Publishes heartbeat messages to the MessageBus so they are processed
+    through the same unified event loop as user messages.
     """
 
     def __init__(
         self,
         workspace: Path,
-        on_heartbeat: Callable[[str], Coroutine[Any, Any, str]] | None = None,
+        bus: MessageBus,
         interval_s: int = DEFAULT_HEARTBEAT_INTERVAL_S,
         enabled: bool = True,
     ):
         self.workspace = workspace
-        self.on_heartbeat = on_heartbeat
+        self.bus = bus
         self.interval_s = interval_s
         self.enabled = enabled
         self._running = False
@@ -103,7 +110,7 @@ class HeartbeatService:
                 logger.error(f"Heartbeat error: {e}")
 
     async def _tick(self) -> None:
-        """Execute a single heartbeat tick."""
+        """Execute a single heartbeat tick by publishing to the MessageBus."""
         content = self._read_heartbeat_file()
 
         # Skip if HEARTBEAT.md is empty or doesn't exist
@@ -111,23 +118,24 @@ class HeartbeatService:
             logger.debug("Heartbeat: no tasks (HEARTBEAT.md empty)")
             return
 
-        logger.info("Heartbeat: checking for tasks...")
+        logger.info("Heartbeat: publishing to message bus...")
 
-        if self.on_heartbeat:
-            try:
-                response = await self.on_heartbeat(HEARTBEAT_PROMPT)
+        msg = InboundMessage(
+            channel="heartbeat",
+            sender_id="heartbeat",
+            chat_id="heartbeat",
+            content=HEARTBEAT_PROMPT,
+            message_type=MSG_SYSTEM_HEARTBEAT,
+        )
+        await self.bus.publish_inbound(msg)
 
-                # Check if agent said "nothing to do"
-                if HEARTBEAT_OK_TOKEN in response.upper().replace("_", ""):
-                    logger.info("Heartbeat: OK (no action needed)")
-                else:
-                    logger.info(f"Heartbeat: completed task")
-
-            except Exception as e:
-                logger.error(f"Heartbeat execution failed: {e}")
-
-    async def trigger_now(self) -> str | None:
+    async def trigger_now(self) -> None:
         """Manually trigger a heartbeat."""
-        if self.on_heartbeat:
-            return await self.on_heartbeat(HEARTBEAT_PROMPT)
-        return None
+        msg = InboundMessage(
+            channel="heartbeat",
+            sender_id="heartbeat",
+            chat_id="heartbeat",
+            content=HEARTBEAT_PROMPT,
+            message_type=MSG_SYSTEM_HEARTBEAT,
+        )
+        await self.bus.publish_inbound(msg)

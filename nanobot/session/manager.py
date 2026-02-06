@@ -1,5 +1,6 @@
 """Session management for conversation history."""
 
+import asyncio
 import json
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -23,13 +24,18 @@ class Session:
     messages: list[dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+    last_accessed: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
+    token_count: int = 0
+    compaction_count: int = 0
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
         msg = {"role": role, "content": content, "timestamp": datetime.now().isoformat(), **kwargs}
         self.messages.append(msg)
-        self.updated_at = datetime.now()
+        now = datetime.now()
+        self.updated_at = now
+        self.last_accessed = now
 
     def mark_processing(self, content: str, tool_context: str = "") -> None:
         """Mark that we're processing a user message (for crash recovery)."""
@@ -38,6 +44,11 @@ class Session:
             "content": content[:200],  # Store truncated content for context
             "last_tools": tool_context[:500],  # Recent tool activity for better recovery
         }
+
+    @property
+    def is_processing(self) -> bool:
+        """Return True if the session is currently processing a message."""
+        return "processing" in self.metadata
 
     def clear_processing(self) -> None:
         """Clear the processing flag (task completed successfully)."""
@@ -76,24 +87,58 @@ class Session:
 
 class SessionManager:
     """
-    Manages conversation sessions.
+    Manages conversation sessions with in-memory-first storage.
 
-    Sessions are stored as JSONL files in the sessions directory.
+    The in-memory ``_sessions`` dict is the primary data store.
+    Every ``save()`` writes through to a JSONL file on disk as a durable backup.
+    On ``get_or_create()``, memory is checked first; disk is only consulted on a
+    cache miss.  Idle sessions can be evicted from memory via ``evict_stale()``
+    while their JSONL files remain on disk for later reloading.
     """
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
         self.sessions_dir = ensure_dir(Path.home() / ".nanobot" / "sessions")
-        self._cache: dict[str, Session] = {}
+        self._sessions: dict[str, Session] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    # ------------------------------------------------------------------
+    # Backward-compatible alias so callers using ``._cache`` still work.
+    # ------------------------------------------------------------------
+    @property
+    def _cache(self) -> dict[str, Session]:
+        return self._sessions
+
+    @_cache.setter
+    def _cache(self, value: dict[str, Session]) -> None:
+        self._sessions = value
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
         safe_key = safe_filename(key.replace(":", "_"))
         return self.sessions_dir / f"{safe_key}.jsonl"
 
+    def _get_lock(self, key: str) -> asyncio.Lock:
+        """Return (or create) a per-session asyncio.Lock."""
+        if key not in self._locks:
+            self._locks[key] = asyncio.Lock()
+        return self._locks[key]
+
+    # ------------------------------------------------------------------
+    # Core API
+    # ------------------------------------------------------------------
+
     def get_or_create(self, key: str) -> Session:
         """
         Get an existing session or create a new one.
+
+        Memory is checked first.  Only on a cache miss is the JSONL file
+        consulted.  A brand-new ``Session`` is created when nothing exists
+        on disk either.
 
         Args:
             key: Session key (usually channel:chat_id).
@@ -101,16 +146,21 @@ class SessionManager:
         Returns:
             The session.
         """
-        # Check cache
-        if key in self._cache:
-            return self._cache[key]
+        # Evict stale sessions on each access (cheap scan)
+        self.evict_stale()
 
-        # Try to load from disk
+        # Check in-memory store first
+        if key in self._sessions:
+            self._sessions[key].last_accessed = datetime.now()
+            return self._sessions[key]
+
+        # Cache miss -- try disk
         session = self._load(key)
         if session is None:
             session = Session(key=key)
 
-        self._cache[key] = session
+        session.last_accessed = datetime.now()
+        self._sessions[key] = session
         return session
 
     def _load(self, key: str) -> Session | None:
@@ -124,6 +174,8 @@ class SessionManager:
             messages = []
             metadata = {}
             created_at = None
+            token_count = 0
+            compaction_count = 0
 
             with open(path) as f:
                 for line in f:
@@ -140,6 +192,8 @@ class SessionManager:
                             if data.get("created_at")
                             else None
                         )
+                        token_count = data.get("token_count", 0)
+                        compaction_count = data.get("compaction_count", 0)
                     else:
                         messages.append(data)
 
@@ -148,13 +202,25 @@ class SessionManager:
                 messages=messages,
                 created_at=created_at or datetime.now(),
                 metadata=metadata,
+                token_count=token_count,
+                compaction_count=compaction_count,
             )
         except Exception as e:
             logger.warning(f"Failed to load session {key}: {e}")
             return None
 
     def save(self, session: Session) -> None:
-        """Save a session to disk."""
+        """
+        Save a session.
+
+        The in-memory store is updated *and* the session is written through
+        to its JSONL file on disk.
+        """
+        # Update in-memory store
+        session.last_accessed = datetime.now()
+        self._sessions[session.key] = session
+
+        # Write-through to disk
         path = self._get_session_path(session.key)
 
         with open(path, "w") as f:
@@ -164,14 +230,14 @@ class SessionManager:
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
                 "metadata": session.metadata,
+                "token_count": session.token_count,
+                "compaction_count": session.compaction_count,
             }
             f.write(json.dumps(metadata_line) + "\n")
 
             # Write messages
             for msg in session.messages:
                 f.write(json.dumps(msg) + "\n")
-
-        self._cache[session.key] = session
 
     def delete(self, key: str) -> bool:
         """
@@ -183,8 +249,9 @@ class SessionManager:
         Returns:
             True if deleted, False if not found.
         """
-        # Remove from cache
-        self._cache.pop(key, None)
+        # Remove from in-memory store
+        self._sessions.pop(key, None)
+        self._locks.pop(key, None)
 
         # Remove file
         path = self._get_session_path(key)
@@ -192,6 +259,10 @@ class SessionManager:
             path.unlink()
             return True
         return False
+
+    # ------------------------------------------------------------------
+    # Session listing / querying
+    # ------------------------------------------------------------------
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """
@@ -249,3 +320,37 @@ class SessionManager:
                 continue
 
         return interrupted
+
+    def get_all_active(self) -> list[Session]:
+        """Return all sessions currently held in the in-memory store."""
+        return list(self._sessions.values())
+
+    # ------------------------------------------------------------------
+    # Eviction
+    # ------------------------------------------------------------------
+
+    def evict_stale(self, ttl_seconds: int = 1800) -> list[str]:
+        """
+        Evict sessions that have been idle longer than *ttl_seconds* from
+        the in-memory store.  Their JSONL files remain on disk and will be
+        reloaded on the next ``get_or_create()`` call.
+
+        Args:
+            ttl_seconds: Maximum idle time in seconds (default 1800 = 30 min).
+
+        Returns:
+            List of evicted session keys.
+        """
+        now = datetime.now()
+        evicted: list[str] = []
+
+        for key in list(self._sessions):
+            session = self._sessions[key]
+            idle = (now - session.last_accessed).total_seconds()
+            if idle > ttl_seconds:
+                del self._sessions[key]
+                self._locks.pop(key, None)
+                evicted.append(key)
+                logger.debug(f"Evicted stale session {key} (idle {idle:.0f}s)")
+
+        return evicted

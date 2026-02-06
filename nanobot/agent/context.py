@@ -5,7 +5,7 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
-from nanobot.agent.memory import MemoryStore
+from nanobot.agent.memory import MemoryManager
 from nanobot.agent.skills import SkillsLoader
 
 
@@ -21,7 +21,7 @@ class ContextBuilder:
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
-        self.memory = MemoryStore(workspace)
+        self.memory = MemoryManager(workspace)
         self.skills = SkillsLoader(workspace)
 
     def build_system_prompt(
@@ -103,16 +103,23 @@ Only stop and provide a final response once the work is done.
 
 ## Workspace
 Your workspace is at: {workspace_path}
-- Memory files: {workspace_path}/memory/MEMORY.md
-- Daily notes: {workspace_path}/memory/YYYY-MM-DD.md
+- Memory overview: {workspace_path}/memory/OVERVIEW.md (auto-generated, always in context)
+- Topic files: {workspace_path}/memory/topics/{{topic-name}}.md
+- Daily notes: {workspace_path}/memory/daily/YYYY-MM-DD.md
 - Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+
+## Memory System
+Your memory is organized into topics and daily notes:
+- **OVERVIEW.md** is auto-generated from topic files. Do NOT edit it directly.
+- **Topics** (memory/topics/): Use for structured, long-term knowledge (e.g., user preferences, project notes, learned APIs). Create/update topic files when you learn something worth remembering across sessions.
+- **Daily notes** (memory/daily/): Use for session logs, transient observations, and day-specific context. Append to today's daily note for things that are relevant now but may not need permanent storage.
+- When you learn something important, create or update a topic file. The OVERVIEW.md will auto-update.
 
 IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
 Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
 For normal conversation, just respond with text - do not call the message tool.
 
-Always be helpful, accurate, and concise. When using tools, explain what you're doing.
-When remembering something, write to {workspace_path}/memory/MEMORY.md"""
+Always be helpful, accurate, and concise. When using tools, explain what you're doing."""
 
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
