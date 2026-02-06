@@ -1,8 +1,10 @@
 """Interactive onboarding wizard for nanobot."""
 
+import os
 import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -140,6 +142,16 @@ def recommend_models(available: list[str]) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Questionary wrappers (return None on Ctrl-C to go back to menu)
 # ---------------------------------------------------------------------------
+
+
+def _restore_terminal() -> None:
+    """Restore terminal to cooked mode after questionary/prompt_toolkit."""
+    if sys.platform == "win32":
+        # On Windows, reset the console mode so the shell accepts input again.
+        os.system("")  # noqa: S605 — triggers Windows to reset console mode
+    else:
+        # On Unix, `stty sane` restores terminal settings.
+        os.system("stty sane 2>/dev/null")  # noqa: S605
 
 
 def _ask_confirm(message: str, default: bool = False) -> bool | None:
@@ -703,20 +715,25 @@ def run_wizard(
         "web_search": lambda: _section_web_search(console, config),
     }
 
-    while True:
-        choice = questionary.select(
-            "Main Menu:",
-            choices=_MENU_CHOICES,
-            style=_STYLE,
-            use_arrow_keys=True,
-            use_jk_keys=False,
-        ).ask()
+    try:
+        while True:
+            choice = questionary.select(
+                "Main Menu:",
+                choices=_MENU_CHOICES,
+                style=_STYLE,
+                use_arrow_keys=True,
+                use_jk_keys=False,
+            ).ask()
 
-        if choice is None or choice == "exit":
-            console.print("[yellow]Exiting without saving.[/yellow]")
-            return
-        elif choice == "save":
-            if _section_review_save(console, config, config_path, workspace):
+            if choice is None or choice == "exit":
+                console.print("[yellow]Exiting without saving.[/yellow]")
                 return
-        else:
-            dispatch[choice]()
+            elif choice == "save":
+                if _section_review_save(console, config, config_path, workspace):
+                    return
+            else:
+                dispatch[choice]()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Exiting without saving.[/yellow]")
+    finally:
+        _restore_terminal()
