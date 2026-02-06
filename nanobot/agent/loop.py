@@ -18,7 +18,12 @@ from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.spawn import SpawnTool
-from nanobot.agent.tools.media import AnalyzeMediaTool, parse_media_injection, build_media_content
+from nanobot.agent.tools.media import (
+    AnalyzeMediaTool,
+    parse_media_injection,
+    build_media_content,
+    model_supports_media,
+)
 from nanobot.agent.subagent import SubagentManager
 from nanobot.session.manager import SessionManager
 
@@ -583,6 +588,39 @@ class AgentLoop:
         )
         return [base, *self.model_spec.fallbacks]
 
+    def _strip_media_from_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Remove media content from messages for text-only models."""
+        stripped = []
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, list):
+                # Multi-part content - keep only text parts
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            text_parts.append(part)
+                        elif part.get("type") in ("image_url", "input_audio"):
+                            # Skip media, add placeholder
+                            text_parts.append(
+                                {
+                                    "type": "text",
+                                    "text": "[Media content not supported by this model]",
+                                }
+                            )
+                    elif isinstance(part, str):
+                        text_parts.append({"type": "text", "text": part})
+
+                if text_parts:
+                    # If only one text part, flatten to string
+                    if len(text_parts) == 1 and text_parts[0].get("type") == "text":
+                        stripped.append({**msg, "content": text_parts[0]["text"]})
+                    else:
+                        stripped.append({**msg, "content": text_parts})
+            else:
+                stripped.append(msg)
+        return stripped
+
     async def _chat_with_fallback(
         self,
         messages: list[dict[str, Any]],
@@ -602,11 +640,18 @@ class AgentLoop:
         candidates = self._model_candidates()
 
         for i, spec in enumerate(candidates):
+            # Check if model supports media - if not, strip media from messages
+            if model_supports_media(spec.model):
+                model_messages = messages
+            else:
+                logger.info(f"Model {spec.model} doesn't support media, stripping media content")
+                model_messages = self._strip_media_from_messages(messages)
+
             # Retry loop for transient errors on this model
             for attempt in range(max_retries):
                 try:
                     response = await self.provider.chat(
-                        messages=messages,
+                        messages=model_messages,
                         tools=tools,
                         model=spec.model,
                         max_tokens=spec.max_tokens,

@@ -14,6 +14,44 @@ SUPPORTED_VIDEO = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".mp
 SUPPORTED_AUDIO = {".mp3", ".wav", ".flac", ".ogg", ".aac", ".m4a", ".wma", ".opus"}
 SUPPORTED_IMAGE = {".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".gif", ".bmp"}
 
+# Models that support multimodal input (video/image/audio)
+# This is used to skip media injection for text-only models
+MULTIMODAL_MODELS = {
+    # Gemini models with vision/video
+    "gemini/gemini-2.0-flash",
+    "gemini/gemini-2.5-flash",
+    "gemini/gemini-2.5-flash-preview",
+    "gemini/gemini-2.5-pro",
+    "gemini/gemini-2.5-pro-preview",
+    "gemini/gemini-3-flash-preview",
+    "gemini/gemini-1.5-flash",
+    "gemini/gemini-1.5-pro",
+    # OpenAI models with vision
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "openai/gpt-4-turbo",
+    "openai/gpt-4-vision-preview",
+    # Anthropic models with vision
+    "anthropic/claude-3-opus",
+    "anthropic/claude-3-sonnet",
+    "anthropic/claude-3-haiku",
+    "anthropic/claude-3.5-sonnet",
+    "anthropic/claude-sonnet-4",
+}
+
+
+def model_supports_media(model: str) -> bool:
+    """Check if a model supports multimodal (image/video/audio) input."""
+    # Check exact match first
+    if model in MULTIMODAL_MODELS:
+        return True
+    # Check prefix match for versioned models
+    for supported in MULTIMODAL_MODELS:
+        if model.startswith(supported):
+            return True
+    return False
+
+
 # Max file sizes (in bytes) - conservative limits for inline encoding
 MAX_VIDEO_SIZE = 20 * 1024 * 1024  # 20MB
 MAX_AUDIO_SIZE = 25 * 1024 * 1024  # 25MB
